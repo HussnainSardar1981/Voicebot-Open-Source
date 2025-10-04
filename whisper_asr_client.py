@@ -36,6 +36,19 @@ class WhisperASRClient:
 
             # Check if CUDA is available for faster processing
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            # Get GPU info if available
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                logger.info(f"GPU detected: {gpu_name} ({gpu_memory:.1f}GB)")
+
+                # Move model to GPU for faster inference
+                if hasattr(self.model, 'to'):
+                    self.model = self.model.to(self.device)
+            else:
+                logger.warning("CUDA not available - using CPU (slower)")
+
             logger.info(f"Whisper ASR Client initialized: model={self.model_size}, device={self.device}")
 
         except Exception as e:
@@ -127,17 +140,23 @@ class WhisperASRClient:
 
             logger.info(f"Running Whisper transcription on: {audio_to_process}")
 
-            # Transcribe with Whisper
-            # Options for better accuracy:
-            # - fp16=False for better compatibility
+            # Transcribe with Whisper - optimized for GPU
+            # GPU optimization options:
+            # - fp16=True for H100 GPU (faster inference)
             # - language="en" for English-only processing (faster)
             # - task="transcribe" for transcription (not translation)
+            # - beam_size=5 for better accuracy on GPU
+            use_fp16 = torch.cuda.is_available() and self.device == "cuda"
+
             result = self.model.transcribe(
                 audio_to_process,
-                fp16=False,           # Better compatibility
+                fp16=use_fp16,        # Use FP16 on GPU for speed
                 language="en",        # English only (faster)
                 task="transcribe",    # Transcription mode
-                verbose=False         # Less verbose output
+                verbose=False,        # Less verbose output
+                beam_size=5,          # Better accuracy (GPU can handle it)
+                best_of=5,           # Multiple candidates for better results
+                temperature=0.0       # Deterministic output
             )
 
             # Cleanup temp file immediately
