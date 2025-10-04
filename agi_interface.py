@@ -177,7 +177,7 @@ class FastInterruptRecorder:
 
         logger.info("Listening for user input...")
         # Shorter timeout for faster responsiveness
-        result = self.agi.command(f'RECORD FILE {record_file} wav "#" {timeout * 1000} 0 s=1')
+        result = self.agi.command(f'RECORD FILE {record_file} wav "#" {timeout * 1000} 0 s=2')
 
         if not self.agi.connected:
             return None
@@ -189,7 +189,7 @@ class FastInterruptRecorder:
             file_size = os.path.getsize(wav_file)
             logger.info(f"Recording: {file_size} bytes")
 
-            if file_size > 100:  # Much lower threshold for quiet voices
+            if file_size > 800:  # Use RIVA's proven threshold
                 transcript = self.asr.transcribe_file(wav_file)
 
             # Cleanup
