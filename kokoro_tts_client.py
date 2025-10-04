@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-KokoroTTSClient - Text-to-Speech using Kokoro (Official Package)
-Drop-in replacement for DirectTTSClient (RIVA)
+KokoroTTSClient - Professional Text-to-Speech using Kokoro
+GPU-accelerated natural voice synthesis for professional voicebot applications
 """
 
 import os
@@ -12,21 +12,23 @@ import logging
 import soundfile as sf
 import subprocess
 from kokoro import KPipeline
-from config import TTS_CONFIG, USE_TTS
+from config import KOKORO_CONFIG
 
 logger = logging.getLogger(__name__)
 
 class KokoroTTSClient:
-    """Kokoro TTS Client - Drop-in replacement for RIVA TTS"""
+    """Professional Kokoro TTS Client - Natural Voice Synthesis"""
 
-    def __init__(self, voice_name=None):
+    def __init__(self):
         try:
-            # Use config values
-            tts_config = TTS_CONFIG.get(USE_TTS, TTS_CONFIG["kokoro"])
-            self.voice_name = voice_name or tts_config["voice"]
+            # Use pure Kokoro configuration
+            self.voice_name = KOKORO_CONFIG["voice"]
+            self.sample_rate = KOKORO_CONFIG["sample_rate"]
+            self.target_sample_rate = KOKORO_CONFIG["target_sample_rate"]
+            self.language = KOKORO_CONFIG["language"]
+            self.speed = KOKORO_CONFIG["speed"]
 
-            # Initialize Kokoro pipeline with American English and GPU support
-            logger.info("Initializing Kokoro TTS pipeline...")
+            logger.info("Initializing professional Kokoro TTS pipeline...")
 
             # Check for GPU availability
             import torch
@@ -55,22 +57,22 @@ class KokoroTTSClient:
             # Default to af_heart (most human-like) if voice not mapped
             self.kokoro_voice = self.voice_mapping.get(self.voice_name, "af_heart")
 
-            # Audio quality settings from config
+            # Audio quality settings for professional output
             self.audio_quality = {
-                "native_sample_rate": 24000,                               # Kokoro outputs 24kHz
-                "target_sample_rate": tts_config["target_sample_rate"],     # Asterisk compatibility (8kHz)
-                "speech_speed": 1.0,                                        # Normal speed
-                "language": "en-us"
+                "native_sample_rate": self.sample_rate,          # Kokoro native (24kHz)
+                "target_sample_rate": self.target_sample_rate,   # Asterisk compatibility (8kHz)
+                "speech_speed": self.speed,                      # Natural speed
+                "language": self.language                        # English
             }
 
-            logger.info(f"Kokoro TTS Client initialized with voice: {self.kokoro_voice} (from config: USE_TTS={USE_TTS})")
+            logger.info(f"✅ Kokoro TTS ready: voice={self.kokoro_voice}, GPU={torch.cuda.is_available()}")
 
         except Exception as e:
             logger.error(f"Failed to initialize Kokoro TTS: {e}")
             raise
 
     def _get_voice_speed(self, voice_type):
-        """Get speech speed based on voice type (matching RIVA's voice type system)"""
+        """Get speech speed based on voice type for natural conversation flow"""
         speed_map = {
             "empathetic": 0.88,    # Slower = more empathetic
             "technical": 0.94,     # Slightly slower for clarity
@@ -126,7 +128,7 @@ class KokoroTTSClient:
 
     def synthesize(self, text, voice_type="default", voice_override=None):
         """
-        SAME INTERFACE as your existing RIVA TTS client
+        Professional text-to-speech synthesis with natural voice
         Returns path to generated WAV file compatible with Asterisk
         """
         try:
