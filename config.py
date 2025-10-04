@@ -9,40 +9,25 @@ import logging
 
 # Project configuration
 PROJECT_DIR = "/home/aiadmin/netovo_voicebot/kokora"
-CONTAINER_NAME = "riva-speech"
+# Open Source Speech Configuration - Pure Whisper + Kokoro Implementation
+USE_ASR = "whisper"
+USE_TTS = "kokoro"
 
-# Speech service configuration - RIVA vs Open Source
-USE_ASR = "whisper"  # Options: "riva", "moonshine", "whisper"
-USE_TTS = "kokoro"   # Options: "riva", "kokoro"
-
-# ASR Configuration
-ASR_CONFIG = {
-    "riva": {
-        "container": "riva-speech",
-        "sample_rate": 16000
-    },
-    "moonshine": {
-        "model": "moonshine/base",  # or "moonshine/tiny" for faster processing
-        "sample_rate": 16000
-    },
-    "whisper": {
-        "model": "large",  # Using "large" for H100 GPU - maximum accuracy for professional use
-        "sample_rate": 16000
-    }
+# Whisper ASR Configuration
+WHISPER_CONFIG = {
+    "model": "large",       # GPU-optimized for H100 - maximum accuracy
+    "sample_rate": 16000,   # Whisper standard
+    "device": "cuda",       # GPU acceleration
+    "language": "en"        # English language
 }
 
-# TTS Configuration
-TTS_CONFIG = {
-    "riva": {
-        "container": "riva-speech",
-        "voice": "English-US.Female-1",
-        "sample_rate": 22050
-    },
-    "kokoro": {
-        "voice": "af_sarah",        # Available: af_sarah, af_bella, af_jessica, af_nova, af_sky
-        "sample_rate": 24000,       # Kokoro native
-        "target_sample_rate": 8000  # Asterisk compatibility
-    }
+# Kokoro TTS Configuration
+KOKORO_CONFIG = {
+    "voice": "af_heart",           # Most human-like voice
+    "sample_rate": 24000,          # Kokoro native sample rate
+    "target_sample_rate": 8000,    # Asterisk compatibility
+    "language": "en",              # English language
+    "speed": 0.92                  # Natural speaking pace
 }
 
 # Audio settings
