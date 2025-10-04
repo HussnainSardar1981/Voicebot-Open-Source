@@ -58,7 +58,7 @@ CONVERSATION_CONFIG = {
     "max_failed_interactions": 3,
     "max_no_response_count": 2,
     "record_timeout": 10,
-    "voice_detection_threshold": 100,
+    "voice_detection_threshold": 800,
     "interrupt_detection_threshold": 400
 }
 
