@@ -189,7 +189,7 @@ class FastInterruptRecorder:
             file_size = os.path.getsize(wav_file)
             logger.info(f"Recording: {file_size} bytes")
 
-            if file_size > 800:  # Lower threshold for faster detection
+            if file_size > 100:  # Much lower threshold for quiet voices
                 transcript = self.asr.transcribe_file(wav_file)
 
             # Cleanup
