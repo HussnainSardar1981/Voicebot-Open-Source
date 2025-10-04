@@ -25,9 +25,21 @@ class KokoroTTSClient:
             tts_config = TTS_CONFIG.get(USE_TTS, TTS_CONFIG["kokoro"])
             self.voice_name = voice_name or tts_config["voice"]
 
-            # Initialize Kokoro pipeline with American English
+            # Initialize Kokoro pipeline with American English and GPU support
             logger.info("Initializing Kokoro TTS pipeline...")
-            self.pipeline = KPipeline(lang_code='a')  # 'a' for American English
+
+            # Check for GPU availability
+            import torch
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                logger.info(f"GPU detected for TTS: {gpu_name}")
+                # Initialize with GPU support
+                self.pipeline = KPipeline(lang_code='a', device=self.device)
+            else:
+                logger.info("Using CPU for TTS")
+                self.pipeline = KPipeline(lang_code='a')  # 'a' for American English
 
             # Map config voice names to Kokoro voices
             self.voice_mapping = {
