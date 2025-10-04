@@ -1,7 +1,7 @@
 #!/home/aiadmin/netovo_voicebot/venv/bin/python3
 """
-VoiceBot Main Orchestrator - Refactored from production_agi_voicebot.py
-This module coordinates all components and manages the conversation flow.
+Professional VoiceBot - Pure Whisper + Kokoro Implementation
+GPU-accelerated speech processing for professional customer service
 """
 
 import os
@@ -9,15 +9,15 @@ import time
 import logging
 from datetime import datetime
 
-# Import our modular components
+# Import configuration and utilities
 from config import (
     setup_logging, setup_project_path, CONVERSATION_CONFIG,
     EXIT_PHRASES, URGENT_PHRASES, VOICE_TYPES
 )
-# Import open-source replacements as drop-in substitutes
-from kokoro_tts_client import KokoroTTSClient as DirectTTSClient
-from whisper_asr_client import WhisperASRClient as DirectASRClient
-# Note: Original RIVA clients remain in tts_client.py and asr_client.py if rollback needed
+
+# Import pure open-source speech stack
+from kokoro_tts_client import KokoroTTSClient
+from whisper_asr_client import WhisperASRClient
 from ollama_client import SimpleOllamaClient
 from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
@@ -56,11 +56,11 @@ def initialize_models_persistent():
     try:
         if _tts_client is None:
             logger.info("Loading Kokoro TTS client (af_heart voice)...")
-            _tts_client = DirectTTSClient()
+            _tts_client = KokoroTTSClient()
 
         if _asr_client is None:
             logger.info("Loading Whisper ASR client (Large model on GPU)...")
-            _asr_client = DirectASRClient()
+            _asr_client = WhisperASRClient()
 
         if _ollama_client is None:
             logger.info("Loading Ollama client...")
