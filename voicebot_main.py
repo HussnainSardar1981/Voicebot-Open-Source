@@ -268,9 +268,6 @@ def main():
 
         agi.verbose("VoiceBot Active - Loading...")
 
-        # Play brief wait message while models load
-        agi.say_number("1")  # Quick beep to confirm call is connected
-
         # THEN get models (models load in background while call is active)
         tts, asr, ollama = get_preloaded_clients()
         logger.info("Models ready for conversation")
