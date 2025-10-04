@@ -57,11 +57,20 @@ class SimpleAGI:
 
     def answer(self):
         """Answer call"""
+        # Check if call is already answered
+        status_result = self.command("CHANNEL STATUS")
+        if "result=6" in status_result:  # Already answered
+            logger.info("Call already answered")
+            self.call_answered = True
+            return True
+
         result = self.command("ANSWER")
         success = result and result.startswith('200')
         if success:
             self.call_answered = True
-            logger.info("Call answered")
+            logger.info("Call answered successfully")
+        else:
+            logger.error(f"Failed to answer call: {result}")
         return success
 
     def hangup(self):
