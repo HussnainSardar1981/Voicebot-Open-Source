@@ -26,7 +26,7 @@ ASR_CONFIG = {
         "sample_rate": 16000
     },
     "whisper": {
-        "model": "base",  # Options: "tiny", "base", "small", "medium", "large"
+        "model": "large",  # Using "large" for H100 GPU - maximum accuracy for professional use
         "sample_rate": 16000
     }
 }
