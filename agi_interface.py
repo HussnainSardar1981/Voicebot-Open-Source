@@ -177,7 +177,7 @@ class FastInterruptRecorder:
 
         logger.info("Listening for user input...")
         # Shorter timeout for faster responsiveness
-        result = self.agi.command(f'RECORD FILE {record_file} wav "#" {timeout * 1000} 0 s=2')
+        result = self.agi.command(f'RECORD FILE {record_file} wav "#" {timeout * 1000} 0 s=1')
 
         if not self.agi.connected:
             return None
