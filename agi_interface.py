@@ -109,8 +109,15 @@ class SimpleAGI:
         # Start monitoring for voice input immediately
         monitor_file = f"/var/spool/asterisk/monitor/voice_{int(time.time())}_{uuid.uuid4().hex[:4]}"
 
-        # Record with shorter timeout to catch interruptions quickly
-        result = self.command(f'RECORD FILE {monitor_file} wav "#" 3000 0 s=1')
+        # Use MixMonitor for production-grade voice interrupt detection
+        mixmonitor_result = self.command(f'EXEC MixMonitor {monitor_file}.wav,b')
+
+        if not mixmonitor_result or not mixmonitor_result.startswith('200'):
+            logger.warning(f"MixMonitor failed, using fallback: {mixmonitor_result}")
+            result = self.command(f'RECORD FILE {monitor_file} wav "#" 3000 0 s=1')
+        else:
+            # MixMonitor started successfully
+            result = "200 result=0"
 
         # Check recording result
         wav_file = f"{monitor_file}.wav"
@@ -121,8 +128,12 @@ class SimpleAGI:
             if file_size > 400:  # Voice detected
                 logger.info("User spoke during playback!")
 
-                # Stop background playback
+                # Stop background playback and MixMonitor
                 self.command('EXEC StopPlayback')
+                self.command('EXEC StopMixMonitor')
+
+                # Small delay to ensure file is complete
+                time.sleep(0.1)
 
                 # Transcribe the interruption
                 transcript = asr_client.transcribe_file(wav_file)
@@ -144,6 +155,9 @@ class SimpleAGI:
                 os.unlink(wav_file)
             except:
                 pass
+
+        # Stop MixMonitor if still running
+        self.command('EXEC StopMixMonitor')
 
         # If we get here, playback completed without interruption
         logger.info("Playback completed without interruption")
