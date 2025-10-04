@@ -44,15 +44,15 @@ class KokoroTTSClient:
             # Map config voice names to Kokoro voices
             self.voice_mapping = {
                 "af_sarah": "af_sarah",
-                "af_bella": "af_bella",
-                "af_jessica": "af_jessica",
-                "af_nova": "af_nova",
-                "af_sky": "af_sky",
-                "af_heart": "af_heart",  # Popular Kokoro voice
+                "af_bella": "af_bella",    # More natural sounding
+                "af_jessica": "af_jessica", # Professional tone
+                "af_nova": "af_nova",      # Clear pronunciation
+                "af_sky": "af_sky",        # Warm voice
+                "af_heart": "af_heart",    # Most human-like
                 "af_alloy": "af_alloy"
             }
 
-            # Default to af_heart if voice not mapped
+            # Default to af_heart (most human-like) if voice not mapped
             self.kokoro_voice = self.voice_mapping.get(self.voice_name, "af_heart")
 
             # Audio quality settings from config
@@ -80,15 +80,34 @@ class KokoroTTSClient:
         return speed_map.get(voice_type, 0.92)
 
     def _enhance_text_for_speech(self, text, voice_type="default"):
-        """Enhance text for more natural speech"""
+        """Enhance text for more natural speech with pronunciation fixes"""
         # Escape any problematic characters
         safe_text = html.escape(text, quote=False)
 
+        # Professional pronunciation corrections
+        pronunciation_fixes = {
+            "NETOVO": "NET-OH-VOH",           # Clear pronunciation for company name
+            "Netovo": "Net-oh-voh",           # Alternative casing
+            "netovo": "net-oh-voh",           # Lowercase version
+            "AGI": "A-G-I",                   # Spell out acronyms
+            "API": "A-P-I",                   # Spell out acronyms
+            "VoIP": "Voice over I-P",         # Expand technical terms
+            "SIP": "S-I-P",                   # Spell out protocols
+        }
+
+        # Apply pronunciation fixes
+        for original, phonetic in pronunciation_fixes.items():
+            safe_text = safe_text.replace(original, phonetic)
+
         # Basic text normalization for better TTS
-        safe_text = safe_text.replace("&", "and")
-        safe_text = safe_text.replace("%", " percent")
+        safe_text = safe_text.replace("&", " and ")
+        safe_text = safe_text.replace("%", " percent ")
         safe_text = safe_text.replace("@", " at ")
         safe_text = safe_text.replace("#", " number ")
+
+        # Improve number pronunciation
+        safe_text = safe_text.replace("24/7", "twenty-four seven")
+        safe_text = safe_text.replace("3CX", "three-C-X")
 
         # Add natural pauses for empathetic responses
         if voice_type == "empathetic":
@@ -97,6 +116,11 @@ class KokoroTTSClient:
             for word in empathetic_words:
                 if word in safe_text.lower():
                     safe_text = safe_text.replace(word, f"{word},")
+
+        # Add professional pauses for greetings
+        elif voice_type == "greeting":
+            safe_text = safe_text.replace(". I'm", ". I'm")  # Natural pause
+            safe_text = safe_text.replace("NETOVO.", "NET-OH-VOH.")
 
         return safe_text
 
