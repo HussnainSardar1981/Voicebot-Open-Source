@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KokoroTTSClient - Text-to-Speech using Kokoro (Open Source)
+KokoroTTSClient - Text-to-Speech using Kokoro (Official Package)
 Drop-in replacement for DirectTTSClient (RIVA)
 """
 
@@ -11,8 +11,7 @@ import html
 import logging
 import soundfile as sf
 import subprocess
-from pathlib import Path
-from kokoro_onnx import Kokoro
+from kokoro import KPipeline
 from config import TTS_CONFIG, USE_TTS
 
 logger = logging.getLogger(__name__)
@@ -26,84 +25,36 @@ class KokoroTTSClient:
             tts_config = TTS_CONFIG.get(USE_TTS, TTS_CONFIG["kokoro"])
             self.voice_name = voice_name or tts_config["voice"]
 
-            # Model files paths
-            self.model_dir = Path("/home/aiadmin/netovo_voicebot/models")
-            self.model_dir.mkdir(exist_ok=True)
+            # Initialize Kokoro pipeline with American English
+            logger.info("Initializing Kokoro TTS pipeline...")
+            self.pipeline = KPipeline(lang_code='a')  # 'a' for American English
 
-            self.model_path = self.model_dir / "kokoro-v1.0.onnx"
-            self.voices_path = self.model_dir / "voices-v1.0.bin"
-
-            # Download models if not present
-            self._ensure_models_downloaded()
-
-            # Initialize Kokoro with model files
-            self.kokoro = Kokoro(str(self.model_path), str(self.voices_path))
-
-            # Available Kokoro voices (female focus for consistency)
-            self.available_voices = {
-                "af_sarah": "af_sarah",      # Default - clear female voice
-                "af_bella": "af_bella",      # Warm female voice
-                "af_jessica": "af_jessica",  # Professional female voice
-                "af_nova": "af_nova",        # Energetic female voice
-                "af_sky": "af_sky"           # Soft female voice
+            # Map config voice names to Kokoro voices
+            self.voice_mapping = {
+                "af_sarah": "af_sarah",
+                "af_bella": "af_bella",
+                "af_jessica": "af_jessica",
+                "af_nova": "af_nova",
+                "af_sky": "af_sky",
+                "af_heart": "af_heart",  # Popular Kokoro voice
+                "af_alloy": "af_alloy"
             }
 
-            # 🎵 AUDIO QUALITY SETTINGS - Use config values
+            # Default to af_heart if voice not mapped
+            self.kokoro_voice = self.voice_mapping.get(self.voice_name, "af_heart")
+
+            # Audio quality settings from config
             self.audio_quality = {
-                "sample_rate": tts_config["sample_rate"],               # Kokoro native sample rate from config
-                "target_sample_rate": tts_config["target_sample_rate"], # Asterisk compatibility from config
-                "speech_speed": 1.0,                                    # Normal speed (adjustable per voice_type)
-                "language": "en-us"                                     # English US
+                "native_sample_rate": 24000,                               # Kokoro outputs 24kHz
+                "target_sample_rate": tts_config["target_sample_rate"],     # Asterisk compatibility (8kHz)
+                "speech_speed": 1.0,                                        # Normal speed
+                "language": "en-us"
             }
 
-            logger.info(f"Kokoro TTS Client initialized with voice: {self.voice_name} (from config: USE_TTS={USE_TTS})")
+            logger.info(f"Kokoro TTS Client initialized with voice: {self.kokoro_voice} (from config: USE_TTS={USE_TTS})")
 
         except Exception as e:
             logger.error(f"Failed to initialize Kokoro TTS: {e}")
-            raise
-
-    def _ensure_models_downloaded(self):
-        """Download Kokoro model files if they don't exist"""
-        try:
-            # Check if both model files exist
-            if self.model_path.exists() and self.voices_path.exists():
-                logger.info("Kokoro model files already exist")
-                return
-
-            logger.info("Downloading Kokoro model files...")
-
-            # Download model file
-            if not self.model_path.exists():
-                logger.info("Downloading kokoro-v1.0.onnx...")
-                model_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
-                subprocess.run([
-                    "wget", "-O", str(self.model_path), model_url
-                ], check=True, timeout=300)
-                logger.info(f"Downloaded model to: {self.model_path}")
-
-            # Download voices file
-            if not self.voices_path.exists():
-                logger.info("Downloading voices-v1.0.bin...")
-                voices_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
-                subprocess.run([
-                    "wget", "-O", str(self.voices_path), voices_url
-                ], check=True, timeout=300)
-                logger.info(f"Downloaded voices to: {self.voices_path}")
-
-            # Verify downloads
-            if not (self.model_path.exists() and self.voices_path.exists()):
-                raise Exception("Model files download failed")
-
-            # Check file sizes (basic verification)
-            model_size = self.model_path.stat().st_size
-            voices_size = self.voices_path.stat().st_size
-            logger.info(f"Model files ready: kokoro-v1.0.onnx ({model_size:,} bytes), voices-v1.0.bin ({voices_size:,} bytes)")
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to download Kokoro models: {e}")
-            raise Exception(f"Model download failed: {e}")
-        except Exception as e:
-            logger.error(f"Error ensuring models downloaded: {e}")
             raise
 
     def _get_voice_speed(self, voice_type):
@@ -117,7 +68,7 @@ class KokoroTTSClient:
         return speed_map.get(voice_type, 0.92)
 
     def _enhance_text_for_speech(self, text, voice_type="default"):
-        """Enhance text for more natural speech (similar to RIVA's SSML enhancement)"""
+        """Enhance text for more natural speech"""
         # Escape any problematic characters
         safe_text = html.escape(text, quote=False)
 
@@ -132,7 +83,8 @@ class KokoroTTSClient:
             # Add slight pauses after empathetic words
             empathetic_words = ["sorry", "understand", "apologize", "help"]
             for word in empathetic_words:
-                safe_text = safe_text.replace(word, f"{word},")
+                if word in safe_text.lower():
+                    safe_text = safe_text.replace(word, f"{word},")
 
         return safe_text
 
@@ -143,15 +95,8 @@ class KokoroTTSClient:
         """
         try:
             # Use voice override or default voice
-            voice = voice_override or self.voice_name
-
-            # Ensure voice is available
-            if voice not in self.available_voices:
-                logger.warning(f"Voice '{voice}' not available, using default: {self.voice_name}")
-                voice = self.voice_name
-
-            # Get speed based on voice type (matching RIVA's voice type system)
-            speed = self._get_voice_speed(voice_type)
+            voice = voice_override or self.kokoro_voice
+            voice = self.voice_mapping.get(voice, "af_heart")
 
             # Enhance text for natural speech
             enhanced_text = self._enhance_text_for_speech(text, voice_type)
@@ -161,23 +106,33 @@ class KokoroTTSClient:
             temp_output = f"/tmp/kokoro_temp_{unique_id}.wav"
             final_output = f"/tmp/kokoro_tts_{unique_id}.wav"
 
-            logger.info(f"🎵 Kokoro TTS: voice={voice}, speed={speed}, type={voice_type}")
+            logger.info(f"🎵 Kokoro TTS: voice={voice}, type={voice_type}")
             logger.info(f"Synthesizing: '{text[:50]}{'...' if len(text) > 50 else ''}'")
 
             # Generate audio using Kokoro
-            samples, sample_rate = self.kokoro.create(
-                text=enhanced_text,
-                voice=voice,
-                speed=speed,
-                lang=self.audio_quality["language"]
-            )
+            generator = self.pipeline(enhanced_text, voice=voice)
 
-            # Save at native sample rate first
-            sf.write(temp_output, samples, sample_rate, subtype='PCM_16')
+            # Kokoro yields chunks, we need to collect them
+            audio_chunks = []
+            for i, (gs, ps, audio_chunk) in enumerate(generator):
+                audio_chunks.append(audio_chunk)
+                if i == 0:  # First chunk
+                    logger.debug(f"Kokoro TTS generating audio chunks...")
 
-            # Convert to Asterisk-compatible format (8kHz mono)
-            # Using sox for format conversion (same as your existing audio pipeline)
-            import subprocess
+            # Combine all audio chunks
+            if audio_chunks:
+                import numpy as np
+                full_audio = np.concatenate(audio_chunks)
+
+                # Save at native sample rate first (24kHz)
+                sf.write(temp_output, full_audio, self.audio_quality["native_sample_rate"], subtype='PCM_16')
+
+                logger.info(f"Generated audio: {len(full_audio)} samples at {self.audio_quality['native_sample_rate']}Hz")
+            else:
+                logger.error("No audio generated from Kokoro TTS")
+                return None
+
+            # Convert to Asterisk-compatible format (8kHz mono) using sox
             sox_cmd = [
                 'sox', temp_output,
                 '-r', str(self.audio_quality["target_sample_rate"]),  # 8kHz for Asterisk
@@ -217,4 +172,5 @@ class KokoroTTSClient:
 
     def list_voices(self):
         """List available voices"""
-        return list(self.available_voices.keys())
+        return list(self.voice_mapping.keys())
+    
