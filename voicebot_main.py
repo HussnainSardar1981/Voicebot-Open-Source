@@ -16,7 +16,7 @@ from config import (
 )
 # Import open-source replacements as drop-in substitutes
 from kokoro_tts_client import KokoroTTSClient as DirectTTSClient
-from moonshine_asr_client import MoonshineASRClient as DirectASRClient
+from whisper_asr_client import WhisperASRClient as DirectASRClient
 # Note: Original RIVA clients remain in tts_client.py and asr_client.py if rollback needed
 from ollama_client import SimpleOllamaClient
 from agi_interface import SimpleAGI, FastInterruptRecorder
@@ -311,3 +311,4 @@ logger.info("=== VoiceBot Ready - Models load on-demand ===")
 
 if __name__ == "__main__":
     main()
+
