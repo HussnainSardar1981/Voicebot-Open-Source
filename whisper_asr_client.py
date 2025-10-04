@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-WhisperASRClient - Speech Recognition using OpenAI Whisper (Robust & Reliable)
-Drop-in replacement for DirectASRClient (RIVA) and MoonshineASRClient
+WhisperASRClient - Professional Speech Recognition using OpenAI Whisper
+GPU-accelerated speech-to-text for professional voicebot applications
 """
 
 import os
@@ -11,34 +11,30 @@ import subprocess
 import logging
 import whisper
 import torch
-from config import ASR_CONFIG, USE_ASR
+from config import WHISPER_CONFIG
 
 logger = logging.getLogger(__name__)
 
 class WhisperASRClient:
     """Whisper ASR Client - Production-ready speech recognition"""
 
-    def __init__(self, model_size="base"):
+    def __init__(self):
         try:
-            # Use config values with fallback
-            if USE_ASR in ASR_CONFIG:
-                asr_config = ASR_CONFIG[USE_ASR]
-                self.model_size = asr_config.get("model", model_size)
-                self.sample_rate = asr_config.get("sample_rate", 16000)
-            else:
-                self.model_size = model_size
-                self.sample_rate = 16000
+            # Use pure Whisper configuration
+            self.model_size = WHISPER_CONFIG["model"]
+            self.sample_rate = WHISPER_CONFIG["sample_rate"]
+            self.language = WHISPER_CONFIG["language"]
 
-            logger.info(f"Loading Whisper model: {self.model_size}")
+            logger.info(f"Loading Whisper {self.model_size} model for professional ASR...")
 
             # Load Whisper model (auto-downloads if needed)
             self.model = whisper.load_model(self.model_size)
 
             # Check if CUDA is available for faster processing
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = WHISPER_CONFIG.get("device", "cuda" if torch.cuda.is_available() else "cpu")
 
             # Get GPU info if available
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and self.device == "cuda":
                 gpu_name = torch.cuda.get_device_name(0)
                 gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
                 logger.info(f"GPU detected: {gpu_name} ({gpu_memory:.1f}GB)")
@@ -49,7 +45,7 @@ class WhisperASRClient:
             else:
                 logger.warning("CUDA not available - using CPU (slower)")
 
-            logger.info(f"Whisper ASR Client initialized: model={self.model_size}, device={self.device}")
+            logger.info(f"✅ Whisper ASR ready: model={self.model_size}, device={self.device}")
 
         except Exception as e:
             logger.error(f"Failed to initialize Whisper ASR: {e}")
@@ -119,8 +115,8 @@ class WhisperASRClient:
 
     def transcribe_file(self, audio_file):
         """
-        SAME INTERFACE as RIVA and Moonshine ASR clients
-        Returns transcribed text string
+        Professional speech-to-text transcription
+        Returns transcribed text string with high accuracy
         """
         try:
             logger.info(f"Whisper ASR transcribing: {audio_file}")
