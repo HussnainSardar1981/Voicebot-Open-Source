@@ -20,6 +20,7 @@ from whisper_asr_client import WhisperASRClient as DirectASRClient
 # Note: Original RIVA clients remain in tts_client.py and asr_client.py if rollback needed
 from ollama_client import SimpleOllamaClient
 from agi_interface import SimpleAGI, FastInterruptRecorder
+from production_recorder import ProductionCallRecorder
 from audio_utils import convert_audio_for_asterisk
 
 # Set up configuration
@@ -159,8 +160,8 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
     for turn in range(max_turns):
         logger.info(f"Conversation turn {turn + 1}")
 
-        # Use fast recorder for user input
-        transcript = recorder.get_user_input_with_interrupt(
+        # Use production recorder for user input (MixMonitor)
+        transcript = recorder.get_user_input_with_mixmonitor(
             timeout=CONVERSATION_CONFIG["input_timeout"]
         )
 
@@ -223,7 +224,7 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                 elif interrupt:
                     logger.info("Response interrupted by voice")
                     # Get user input since we detected voice but no transcript
-                    transcript = recorder.get_user_input_with_interrupt(timeout=8)
+                    transcript = recorder.get_user_input_with_mixmonitor(timeout=8)
                     if transcript:
                         interrupt_transcript = transcript
             else:
@@ -274,8 +275,8 @@ def main():
 
         agi.verbose("VoiceBot Active - Ready")
 
-        # Initialize fast recorder
-        recorder = FastInterruptRecorder(agi, asr)
+        # Initialize production-grade recorder (MixMonitor-based)
+        recorder = ProductionCallRecorder(agi, asr)
 
         # Handle greeting
         handle_greeting(agi, tts, asr, ollama)
