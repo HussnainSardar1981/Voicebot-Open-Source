@@ -12,8 +12,8 @@ PROJECT_DIR = "/home/aiadmin/netovo_voicebot"
 CONTAINER_NAME = "riva-speech"
 
 # Speech service configuration - RIVA vs Open Source
-USE_ASR = "moonshine"  # Options: "riva", "moonshine"
-USE_TTS = "kokoro"     # Options: "riva", "kokoro"
+USE_ASR = "whisper"  # Options: "riva", "moonshine", "whisper"
+USE_TTS = "kokoro"   # Options: "riva", "kokoro"
 
 # ASR Configuration
 ASR_CONFIG = {
@@ -23,6 +23,10 @@ ASR_CONFIG = {
     },
     "moonshine": {
         "model": "moonshine/base",  # or "moonshine/tiny" for faster processing
+        "sample_rate": 16000
+    },
+    "whisper": {
+        "model": "base",  # Options: "tiny", "base", "small", "medium", "large"
         "sample_rate": 16000
     }
 }
@@ -125,4 +129,3 @@ def setup_project_path():
     """Add project directory to Python path"""
     if PROJECT_DIR not in sys.path:
         sys.path.insert(0, PROJECT_DIR)
-    
