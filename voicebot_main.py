@@ -33,26 +33,32 @@ _asr_client = None
 _ollama_client = None
 
 def initialize_models():
-    """Pre-load all models for instant availability"""
+    """Pre-load all models for instant availability - optimized for AGI calls"""
     global _tts_client, _asr_client, _ollama_client
 
+    # Fast check: if already loaded in this process, skip
+    if _tts_client is not None and _asr_client is not None and _ollama_client is not None:
+        logger.info("Models already loaded in this process")
+        return
+
+    logger.info("Fast-loading models for AGI call...")
+    start_time = time.time()
+
     if _tts_client is None:
-        logger.info("Pre-loading TTS client...")
+        logger.info("Loading TTS client...")
         _tts_client = DirectTTSClient()
 
     if _asr_client is None:
-        logger.info("Pre-loading ASR client...")
+        logger.info("Loading ASR client...")
         _asr_client = DirectASRClient()
 
     if _ollama_client is None:
-        logger.info("Pre-loading Ollama client...")
+        logger.info("Loading Ollama client...")
         _ollama_client = SimpleOllamaClient()
-        # Warm up Ollama with a quick test
-        try:
-            _ollama_client.generate("test", max_tokens=1)
-            logger.info("Ollama warmed up successfully")
-        except Exception as e:
-            logger.warning(f"Ollama warmup failed: {e}")
+        # Skip warm-up for faster startup - first generation will be slightly slower but acceptable
+
+    total_time = time.time() - start_time
+    logger.info(f"Models loaded in {total_time:.1f}s")
 
 def get_preloaded_clients():
     """Get pre-loaded client instances"""
@@ -250,19 +256,24 @@ def main():
     try:
         logger.info("=== FAST AGI VoiceBot Starting ===")
 
-        # Get pre-loaded models for instant availability
-        tts, asr, ollama = get_preloaded_clients()
-        logger.info("Using pre-loaded models")
-
-        # Initialize AGI
+        # Initialize AGI and answer IMMEDIATELY (before loading models)
         agi = SimpleAGI()
         caller_id = agi.env.get('agi_callerid', 'Unknown')
         logger.info(f"Call from: {caller_id}")
 
-        # Answer call immediately
+        # Answer call FIRST - no delays
         if not agi.answer():
             logger.error("Failed to answer")
             return
+
+        agi.verbose("VoiceBot Active - Loading...")
+
+        # Play brief wait message while models load
+        agi.say_number("1")  # Quick beep to confirm call is connected
+
+        # THEN get models (models load in background while call is active)
+        tts, asr, ollama = get_preloaded_clients()
+        logger.info("Models ready for conversation")
 
         agi.verbose("VoiceBot Active - Ready")
 
@@ -296,10 +307,10 @@ def main():
         except Exception as e:
             logger.error(f"Error cleanup failed: {e}")
 
-# Pre-load all models at module import time
-logger.info("=== Initializing VoiceBot Models at Startup ===")
-initialize_models()
-logger.info("=== All Models Ready ===")
+# Models will be loaded on-demand when AGI calls come in
+# This ensures calls are answered immediately, then models load in background
+logger.info("=== VoiceBot Ready - Models load on-demand ===")
+# initialize_models()  # Disabled: Each AGI call is separate process anyway
 
 if __name__ == "__main__":
     main()
