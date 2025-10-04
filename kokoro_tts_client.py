@@ -10,6 +10,8 @@ import uuid
 import html
 import logging
 import soundfile as sf
+import subprocess
+from pathlib import Path
 from kokoro_onnx import Kokoro
 from config import TTS_CONFIG, USE_TTS
 
@@ -24,7 +26,18 @@ class KokoroTTSClient:
             tts_config = TTS_CONFIG.get(USE_TTS, TTS_CONFIG["kokoro"])
             self.voice_name = voice_name or tts_config["voice"]
 
-            self.kokoro = Kokoro()  # Initialize with default models
+            # Model files paths
+            self.model_dir = Path("/home/aiadmin/netovo_voicebot/models")
+            self.model_dir.mkdir(exist_ok=True)
+
+            self.model_path = self.model_dir / "kokoro-v1.0.onnx"
+            self.voices_path = self.model_dir / "voices-v1.0.bin"
+
+            # Download models if not present
+            self._ensure_models_downloaded()
+
+            # Initialize Kokoro with model files
+            self.kokoro = Kokoro(str(self.model_path), str(self.voices_path))
 
             # Available Kokoro voices (female focus for consistency)
             self.available_voices = {
@@ -47,6 +60,50 @@ class KokoroTTSClient:
 
         except Exception as e:
             logger.error(f"Failed to initialize Kokoro TTS: {e}")
+            raise
+
+    def _ensure_models_downloaded(self):
+        """Download Kokoro model files if they don't exist"""
+        try:
+            # Check if both model files exist
+            if self.model_path.exists() and self.voices_path.exists():
+                logger.info("Kokoro model files already exist")
+                return
+
+            logger.info("Downloading Kokoro model files...")
+
+            # Download model file
+            if not self.model_path.exists():
+                logger.info("Downloading kokoro-v1.0.onnx...")
+                model_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
+                subprocess.run([
+                    "wget", "-O", str(self.model_path), model_url
+                ], check=True, timeout=300)
+                logger.info(f"Downloaded model to: {self.model_path}")
+
+            # Download voices file
+            if not self.voices_path.exists():
+                logger.info("Downloading voices-v1.0.bin...")
+                voices_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
+                subprocess.run([
+                    "wget", "-O", str(self.voices_path), voices_url
+                ], check=True, timeout=300)
+                logger.info(f"Downloaded voices to: {self.voices_path}")
+
+            # Verify downloads
+            if not (self.model_path.exists() and self.voices_path.exists()):
+                raise Exception("Model files download failed")
+
+            # Check file sizes (basic verification)
+            model_size = self.model_path.stat().st_size
+            voices_size = self.voices_path.stat().st_size
+            logger.info(f"Model files ready: kokoro-v1.0.onnx ({model_size:,} bytes), voices-v1.0.bin ({voices_size:,} bytes)")
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to download Kokoro models: {e}")
+            raise Exception(f"Model download failed: {e}")
+        except Exception as e:
+            logger.error(f"Error ensuring models downloaded: {e}")
             raise
 
     def _get_voice_speed(self, voice_type):
