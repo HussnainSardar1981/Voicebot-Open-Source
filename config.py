@@ -125,3 +125,4 @@ def setup_project_path():
     """Add project directory to Python path"""
     if PROJECT_DIR not in sys.path:
         sys.path.insert(0, PROJECT_DIR)
+    
