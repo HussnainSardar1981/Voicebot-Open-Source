@@ -37,8 +37,23 @@ class MoonshineASRClient:
             unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
             converted_path = f"/tmp/moonshine_{unique_id}.wav"
 
+            # Check original file details first
+            if os.path.exists(audio_file):
+                orig_size = os.path.getsize(audio_file)
+                logger.info(f"Original audio file: {orig_size} bytes")
+
+                # Get file info
+                try:
+                    import subprocess
+                    file_cmd = subprocess.run(['file', audio_file], capture_output=True, text=True)
+                    logger.info(f"Original file type: {file_cmd.stdout.strip()}")
+                except:
+                    pass
+            else:
+                logger.error(f"Original audio file not found: {audio_file}")
+                return ""
+
             # Convert audio to Moonshine-compatible format (16kHz, mono, 16-bit)
-            # Same conversion as RIVA for consistency
             sox_cmd = [
                 'sox', audio_file,
                 '-r', str(self.sample_rate),  # 16kHz (Moonshine requirement)
@@ -53,12 +68,21 @@ class MoonshineASRClient:
 
             if convert_result.returncode != 0:
                 logger.error(f"Audio conversion failed: {convert_result.stderr}")
+                logger.error(f"Sox stdout: {convert_result.stdout}")
                 return ""
 
-            # Check converted file size
+            # Check converted file size and details
             if os.path.exists(converted_path):
                 file_size = os.path.getsize(converted_path)
                 logger.info(f"Converted audio file: {file_size} bytes")
+
+                # Get converted file info
+                try:
+                    file_cmd = subprocess.run(['file', converted_path], capture_output=True, text=True)
+                    logger.info(f"Converted file type: {file_cmd.stdout.strip()}")
+                except:
+                    pass
+
                 if file_size < 1000:
                     logger.error("Converted file too small")
                     return ""
@@ -68,7 +92,12 @@ class MoonshineASRClient:
 
             # Transcribe with Moonshine
             logger.info(f"Running Moonshine ASR with model: {self.model}")
-            transcription = moonshine_onnx.transcribe(converted_path, self.model)
+            try:
+                transcription = moonshine_onnx.transcribe(converted_path, self.model)
+                logger.info(f"Moonshine raw output: {transcription}")
+            except Exception as e:
+                logger.error(f"Moonshine transcription failed: {e}")
+                return ""
 
             # Cleanup temp file
             try:
