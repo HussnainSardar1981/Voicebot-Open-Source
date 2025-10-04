@@ -28,44 +28,67 @@ setup_project_path()
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Global pre-loaded instances for instant availability
+# Global pre-loaded instances for instant availability - PERSISTENT MODEL LOADING
 _tts_client = None
 _asr_client = None
 _ollama_client = None
+_models_loaded = False
+_model_load_lock = False
 
-def initialize_models():
-    """Pre-load all models for instant availability - optimized for AGI calls"""
-    global _tts_client, _asr_client, _ollama_client
+def initialize_models_persistent():
+    """Pre-load all models ONCE and keep them persistent for professional performance"""
+    global _tts_client, _asr_client, _ollama_client, _models_loaded, _model_load_lock
 
-    # Fast check: if already loaded in this process, skip
-    if _tts_client is not None and _asr_client is not None and _ollama_client is not None:
-        logger.info("Models already loaded in this process")
+    # Prevent multiple concurrent initializations
+    if _model_load_lock:
+        logger.info("Models already being loaded, waiting...")
         return
 
-    logger.info("Fast-loading models for AGI call...")
+    # If already loaded, return immediately
+    if _models_loaded and _tts_client is not None and _asr_client is not None and _ollama_client is not None:
+        logger.info("Models already loaded and ready")
+        return
+
+    _model_load_lock = True
+    logger.info("🚀 PERSISTENT MODEL LOADING - Loading once for all future calls...")
     start_time = time.time()
 
-    if _tts_client is None:
-        logger.info("Loading TTS client...")
-        _tts_client = DirectTTSClient()
+    try:
+        if _tts_client is None:
+            logger.info("Loading Kokoro TTS client (af_heart voice)...")
+            _tts_client = DirectTTSClient()
 
-    if _asr_client is None:
-        logger.info("Loading ASR client...")
-        _asr_client = DirectASRClient()
+        if _asr_client is None:
+            logger.info("Loading Whisper ASR client (Large model on GPU)...")
+            _asr_client = DirectASRClient()
 
-    if _ollama_client is None:
-        logger.info("Loading Ollama client...")
-        _ollama_client = SimpleOllamaClient()
-        # Skip warm-up for faster startup - first generation will be slightly slower but acceptable
+        if _ollama_client is None:
+            logger.info("Loading Ollama client...")
+            _ollama_client = SimpleOllamaClient()
 
-    total_time = time.time() - start_time
-    logger.info(f"Models loaded in {total_time:.1f}s")
+        total_time = time.time() - start_time
+        _models_loaded = True
+        logger.info(f"✅ PERSISTENT MODELS LOADED in {total_time:.1f}s - Ready for instant calls!")
+
+    except Exception as e:
+        logger.error(f"Model loading failed: {e}")
+        _models_loaded = False
+    finally:
+        _model_load_lock = False
 
 def get_preloaded_clients():
-    """Get pre-loaded client instances"""
-    global _tts_client, _asr_client, _ollama_client
+    """Get pre-loaded client instances - INSTANT for professional calls"""
+    global _tts_client, _asr_client, _ollama_client, _models_loaded
+
+    # If models not loaded, load them now (first call only)
+    if not _models_loaded:
+        initialize_models_persistent()
+
+    # Verify models are ready
     if _tts_client is None or _asr_client is None or _ollama_client is None:
-        initialize_models()
+        logger.error("Models not available - attempting emergency reload")
+        initialize_models_persistent()
+
     return _tts_client, _asr_client, _ollama_client
 
 def determine_voice_type(response_text):
@@ -108,11 +131,11 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
     return False, None
 
 def handle_greeting(agi, tts, asr, ollama):
-    """Handle the initial greeting and any interruptions"""
-    logger.info("Playing greeting...")
-    greeting_text = "Hello, thank you for calling NETOVO. I'm Alexis. How can I help you?"
+    """Handle the initial greeting and any interruptions - OPTIMIZED for instant response"""
+    logger.info("Playing greeting (instant)...")
+    greeting_text = "Hello, thank you for calling NET-OH-VOH. I'm Alexis. How can I help you?"
 
-    # Generate greeting TTS quickly
+    # Generate greeting TTS with af_heart voice for natural sound
     tts_file = tts.synthesize(greeting_text, voice_type="greeting")
 
     greeting_transcript = None
@@ -269,9 +292,9 @@ def main():
 
         agi.verbose("VoiceBot Active - Loading...")
 
-        # THEN get models (models load in background while call is active)
+        # Get models (should be instantly available due to persistent loading)
         tts, asr, ollama = get_preloaded_clients()
-        logger.info("Models ready for conversation")
+        logger.info("Models ready for conversation (instant)")
 
         agi.verbose("VoiceBot Active - Ready")
 
@@ -305,10 +328,16 @@ def main():
         except Exception as e:
             logger.error(f"Error cleanup failed: {e}")
 
-# Models will be loaded on-demand when AGI calls come in
-# This ensures calls are answered immediately, then models load in background
-logger.info("=== VoiceBot Ready - Models load on-demand ===")
-# initialize_models()  # Disabled: Each AGI call is separate process anyway
+# *** PROFESSIONAL CUSTOMER SERVICE: LOAD MODELS IMMEDIATELY FOR INSTANT RESPONSE ***
+logger.info("=== VoiceBot Starting - Pre-loading models for instant customer service ===")
+
+# Pre-load models immediately when module is imported
+try:
+    initialize_models_persistent()
+    logger.info("=== VoiceBot Ready - Models pre-loaded for instant response ===")
+except Exception as e:
+    logger.error(f"Initial model loading failed: {e}")
+    logger.info("=== VoiceBot Ready - Models will load on first call ===")
 
 if __name__ == "__main__":
     main()
