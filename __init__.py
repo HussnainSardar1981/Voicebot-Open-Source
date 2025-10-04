@@ -14,8 +14,11 @@ This package contains:
 """
 
 from .config import setup_logging, setup_project_path
-from .tts_client import DirectTTSClient
-from .asr_client import DirectASRClient
+# Import open-source replacements for package-level access
+# from .tts_client import DirectTTSClient
+# from .asr_client import DirectASRClient
+from .kokoro_tts_client import KokoroTTSClient as DirectTTSClient
+from .moonshine_asr_client import MoonshineASRClient as DirectASRClient
 from .ollama_client import SimpleOllamaClient
 from .agi_interface import SimpleAGI, FastInterruptRecorder
 from .audio_utils import convert_audio_for_asterisk
