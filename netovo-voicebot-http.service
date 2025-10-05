@@ -1,0 +1,38 @@
+[Unit]
+Description=NETOVO VoiceBot AGI Service (HTTP Client Mode)
+Documentation=NETOVO AI-driven phone bot AGI handler
+After=network.target netovo-model-worker.service
+Requires=netovo-model-worker.service
+PartOf=netovo-model-worker.service
+
+[Service]
+Type=forking
+User=asterisk
+Group=asterisk
+WorkingDirectory=/home/aiadmin/netovo_voicebot/kokora/telephony
+
+# AGI service doesn't need to be always running - Asterisk calls it
+ExecStart=/bin/true
+RemainAfterExit=yes
+
+# Environment for AGI calls
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/aiadmin/netovo_voicebot/kokora
+
+# Resource limits
+MemoryMax=2G
+CPUQuota=200%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=netovo-voicebot
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/tmp /var/tmp /var/spool/asterisk /usr/share/asterisk/sounds
+
+[Install]
+WantedBy=multi-user.target

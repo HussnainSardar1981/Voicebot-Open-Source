@@ -1,0 +1,52 @@
+[Unit]
+Description=NETOVO VoiceBot Model Worker Service
+Documentation=NETOVO AI-driven phone bot persistent model service
+After=network.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=aiadmin
+Group=aiadmin
+WorkingDirectory=/home/aiadmin/netovo_voicebot/kokora/telephony
+
+# Main service command
+ExecStart=/home/aiadmin/netovo_voicebot/venv/bin/python3 model_worker_service.py
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Environment variables
+Environment=PYTHONUNBUFFERED=1
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=PYTHONPATH=/home/aiadmin/netovo_voicebot/kokora
+
+# Resource limits and security
+MemoryMax=32G
+CPUQuota=800%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=netovo-model-worker
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/tmp /var/tmp /home/aiadmin/netovo_voicebot
+
+# Health monitoring
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Graceful shutdown
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
+Alias=netovo-models.service
