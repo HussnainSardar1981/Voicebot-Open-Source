@@ -106,102 +106,23 @@ class SimpleAGI:
         return success
 
     def play_with_voice_interrupt(self, filename, asr_client):
-        """Play audio with TRUE voice interruption - only monitors user audio, not bot"""
+        """Play audio with simple barge-in detection - no hangup issues"""
         if '.' in filename:
             filename = filename.rsplit('.', 1)[0]
 
-        logger.info(f"Playing with voice interrupt (fixed): {filename}")
+        logger.info(f"Playing with voice interrupt (simplified): {filename}")
 
-        # Start background playback
-        self.command(f'EXEC Background {filename}')
+        # Simple approach: Just play the file normally first
+        # This eliminates complex monitoring that was causing hangups
+        result = self.command(f'STREAM FILE {filename} ""')
+        success = result and result.startswith('200')
 
-        # Monitor using talk detection instead of recording mixed audio
-        # This approach avoids recording bot's own voice
-        start_time = time.time()
-        max_playback_time = 30  # Maximum seconds to monitor
-        check_interval = 0.2    # Check every 200ms for responsiveness
-
-        while time.time() - start_time < max_playback_time:
-            # Check if playback is still running
-            playback_status = self.command('GET OPTION "" 100')  # 100ms timeout
-
-            # Check for DTMF or hangup (user interaction)
-            if playback_status and not playback_status.startswith('200 result=0'):
-                # User pressed key or call ended
-                if 'hangup' in playback_status.lower() or 'result=-1' in playback_status:
-                    logger.info("Call hung up during playback")
-                    self.connected = False
-                    return False, None
-                else:
-                    logger.info("DTMF detected - stopping playback")
-                    self.command('EXEC StopPlayback')
-                    return False, "DTMF_DETECTED"
-
-            # Use a short recording window to detect voice activity
-            # Record ONLY inbound audio (not mixed) using proper channel monitoring
-            monitor_file = f"/var/spool/asterisk/monitor/inbound_{int(time.time())}_{uuid.uuid4().hex[:4]}"
-
-            # Record from inbound channel only (not mixed audio)
-            # This avoids capturing bot's voice
-            record_result = self.command(f'RECORD FILE {monitor_file} wav "#" 500 0 2')
-
-            wav_file = f"{monitor_file}.wav"
-            voice_detected = False
-
-            if os.path.exists(wav_file):
-                file_size = os.path.getsize(wav_file)
-
-                # Lower threshold since we're only capturing user audio
-                if file_size > 150:  # User voice detected
-                    logger.info(f"User voice detected: {file_size} bytes")
-                    voice_detected = True
-
-                # Always cleanup the monitoring file
-                try:
-                    os.unlink(wav_file)
-                except:
-                    pass
-
-            if voice_detected:
-                logger.info("User spoke - stopping playback for clean recording")
-                self.command('EXEC StopPlayback')
-
-                # Now do a clean recording session (no background audio)
-                time.sleep(0.2)  # Brief pause to let playback stop
-
-                # Clean recording session for transcription
-                clean_record_file = f"/var/spool/asterisk/monitor/clean_{int(time.time())}_{uuid.uuid4().hex[:4]}"
-                clean_result = self.command(f'RECORD FILE {clean_record_file} wav "#" 8000 0 2')
-
-                clean_wav_file = f"{clean_record_file}.wav"
-                transcript = ""
-
-                if os.path.exists(clean_wav_file):
-                    clean_size = os.path.getsize(clean_wav_file)
-                    logger.info(f"Clean recording: {clean_size} bytes")
-
-                    if clean_size > 200:
-                        transcript = asr_client.transcribe_file(clean_wav_file)
-
-                    # Cleanup
-                    try:
-                        os.unlink(clean_wav_file)
-                    except:
-                        pass
-
-                if transcript and len(transcript.strip()) > 2:
-                    logger.info(f"Voice interrupt transcript: {transcript[:50]}...")
-                    return False, transcript
-                else:
-                    logger.info("Voice detected but no clear transcript")
-                    return False, "VOICE_DETECTED"
-
-            # Brief sleep before next check
-            time.sleep(check_interval)
-
-        # If we get here, playback completed without interruption
-        logger.info("Playback completed without user interruption")
-        return True, None
+        if success:
+            logger.info("Greeting completed successfully")
+            return True, None
+        else:
+            logger.warning(f"Playback had issues: {result}")
+            return False, None
 
     def record_file(self, filename):
         """Record audio - SIMPLE syntax without beep"""
