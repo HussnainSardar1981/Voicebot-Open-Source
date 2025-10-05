@@ -41,8 +41,15 @@ class ProductionCallRecorder:
 
             logger.info(f"MixMonitor started, waiting {timeout}s for user input...")
 
-            # Wait for user to speak (or timeout)
+            # Wait for user to speak with proper silence detection
             start_time = time.time()
+            speech_detected = False
+            last_file_size = 0
+            silence_start = None
+            silence_threshold = 2.0  # 2 seconds of silence to end recording
+            min_speech_size = 800    # Minimum audio to consider speech started
+            growth_threshold = 50    # Minimum growth to consider ongoing speech
+
             while time.time() - start_time < timeout:
                 if not self.agi.connected:
                     logger.info("Call disconnected during recording")
@@ -51,11 +58,32 @@ class ProductionCallRecorder:
                 # Check if file exists and has content
                 if os.path.exists(wav_file):
                     file_size = os.path.getsize(wav_file)
-                    if file_size > 1000:  # Reasonable audio content detected
-                        logger.info(f"Audio detected: {file_size} bytes")
-                        break
 
-                time.sleep(0.5)  # Check every 500ms
+                    # Phase 1: Detect start of speech
+                    if not speech_detected and file_size > min_speech_size:
+                        speech_detected = True
+                        last_file_size = file_size
+                        logger.info(f"Speech started: {file_size} bytes")
+
+                    # Phase 2: Monitor ongoing speech and detect silence
+                    elif speech_detected:
+                        size_growth = file_size - last_file_size
+
+                        if size_growth > growth_threshold:
+                            # File still growing - user still speaking
+                            silence_start = None  # Reset silence timer
+                            last_file_size = file_size
+                            logger.debug(f"Speech continues: {file_size} bytes (+{size_growth})")
+                        else:
+                            # File not growing much - potential silence
+                            if silence_start is None:
+                                silence_start = time.time()
+                                logger.debug("Silence period started")
+                            elif time.time() - silence_start > silence_threshold:
+                                logger.info(f"Silence detected after {file_size} bytes - ending recording")
+                                break
+
+                time.sleep(0.3)  # Check every 300ms for better responsiveness
 
             # Stop MixMonitor
             stop_result = self.agi.command('EXEC StopMixMonitor')
