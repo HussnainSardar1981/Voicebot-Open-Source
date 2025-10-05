@@ -35,9 +35,41 @@ _ollama_client = None
 _models_loaded = False
 _model_load_lock = False
 
+def initialize_models_fast():
+    """Fast model loading optimized for individual AGI calls"""
+    global _tts_client, _asr_client, _ollama_client, _models_loaded
+
+    logger.info("🚀 FAST MODEL LOADING - Optimized for instant response...")
+    start_time = time.time()
+
+    try:
+        # Load TTS first (needed for greeting)
+        logger.info("Loading Kokoro TTS (optimized)...")
+        _tts_client = KokoroTTSClient()
+
+        # Load Ollama second (simpler)
+        logger.info("Loading Ollama client...")
+        _ollama_client = SimpleOllamaClient()
+
+        # Load ASR last (heaviest model)
+        logger.info("Loading Whisper ASR (GPU-optimized)...")
+        _asr_client = WhisperASRClient()
+
+        total_time = time.time() - start_time
+        _models_loaded = True
+        logger.info(f"✅ FAST MODELS LOADED in {total_time:.1f}s - Ready for conversation!")
+
+    except Exception as e:
+        logger.error(f"Fast model loading failed: {e}")
+        _models_loaded = False
+
 def initialize_models_persistent():
     """Pre-load all models ONCE and keep them persistent for professional performance"""
     global _tts_client, _asr_client, _ollama_client, _models_loaded, _model_load_lock
+
+    # For AGI calls, use fast loading instead
+    if os.environ.get('AGI_CALLERID'):
+        return initialize_models_fast()
 
     # Prevent multiple concurrent initializations
     if _model_load_lock:
@@ -292,17 +324,20 @@ def main():
 
         agi.verbose("VoiceBot Active - Loading...")
 
-        # Get models (should be instantly available due to persistent loading)
+        # Get TTS first for immediate greeting
         tts, asr, ollama = get_preloaded_clients()
-        logger.info("Models ready for conversation (instant)")
 
-        agi.verbose("VoiceBot Active - Ready")
+        # Play greeting IMMEDIATELY after TTS loads (don't wait for ASR)
+        if tts:
+            logger.info("TTS ready - playing instant greeting...")
+            agi.verbose("VoiceBot Active - Ready")
+            handle_greeting(agi, tts, asr, ollama)
+        else:
+            logger.error("TTS not available - fallback greeting")
+            agi.stream_file("demo-thanks")
 
         # Initialize production-grade recorder (MixMonitor-based)
         recorder = ProductionCallRecorder(agi, asr)
-
-        # Handle greeting
-        handle_greeting(agi, tts, asr, ollama)
 
         # Main conversation loop
         conversation_loop(agi, tts, asr, ollama, recorder)
