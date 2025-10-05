@@ -15,7 +15,7 @@ USE_TTS = "kokoro"
 
 # Whisper ASR Configuration
 WHISPER_CONFIG = {
-    "model": "large",       # GPU-optimized for H100 - maximum accuracy
+    "model": "medium",      # Faster loading, still professional accuracy
     "sample_rate": 16000,   # Whisper standard
     "device": "cuda",       # GPU acceleration
     "language": "en"        # English language
