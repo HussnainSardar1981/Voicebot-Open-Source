@@ -20,18 +20,18 @@ class ProductionCallRecorder:
 
     def get_user_input_with_mixmonitor(self, timeout=10):
         """
-        Production-grade user input recording using MixMonitor with smart silence detection
-        Real-time monitoring with proper voice activity detection
+        Production-grade user input recording using MixMonitor
+        Records actual call audio stream (RTP) - not hardware devices
         """
         unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:4]}"
         record_file = f"/var/spool/asterisk/monitor/mix_{unique_id}"
-        wav_file = f"{record_file}.wav"  # Single file with inbound-only recording
+        wav_file = f"{record_file}.wav"
 
         logger.info(f"Starting MixMonitor recording: {record_file}")
 
         try:
-            # Start MixMonitor with inbound-only direction control (Option A)
-            # 'r(in)' parameter = record inbound only (user voice), prevents bot voice hallucinations
+            # Start MixMonitor - records call audio stream (both directions)
+            # Records both inbound (user speech) and outbound (TTS) audio
             mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav'
             result = self.agi.command(mixmonitor_cmd)
 
@@ -41,17 +41,8 @@ class ProductionCallRecorder:
 
             logger.info(f"MixMonitor started, waiting {timeout}s for user input...")
 
-            # Wait for user to speak with proper silence detection
+            # Wait for user to speak (or timeout)
             start_time = time.time()
-            speech_detected = False
-            speech_start_time = None
-            last_file_size = 0
-            silence_start = None
-            silence_threshold = 1.0  # 1 second of silence to end recording
-            min_speech_duration = 1.5  # Must speak for 1.5s before silence detection starts
-            min_speech_size = 400    # Minimum audio to consider speech started (lowered)
-            growth_threshold = 15    # Minimum growth to consider ongoing speech (much more sensitive)
-
             while time.time() - start_time < timeout:
                 if not self.agi.connected:
                     logger.info("Call disconnected during recording")
@@ -60,40 +51,11 @@ class ProductionCallRecorder:
                 # Check if file exists and has content
                 if os.path.exists(wav_file):
                     file_size = os.path.getsize(wav_file)
+                    if file_size > 1000:  # Reasonable audio content detected
+                        logger.info(f"Audio detected: {file_size} bytes")
+                        break
 
-                    # Phase 1: Detect start of speech
-                    if not speech_detected and file_size > min_speech_size:
-                        speech_detected = True
-                        speech_start_time = time.time()
-                        last_file_size = file_size
-                        logger.info(f"Speech started: {file_size} bytes")
-
-                    # Phase 2: Monitor ongoing speech and detect silence
-                    elif speech_detected:
-                        size_growth = file_size - last_file_size
-                        speech_duration = time.time() - speech_start_time
-
-                        if size_growth > growth_threshold:
-                            # File still growing - user still speaking
-                            silence_start = None  # Reset silence timer
-                            last_file_size = file_size
-                            logger.debug(f"Speech continues: {file_size} bytes (+{size_growth})")
-                        else:
-                            # File not growing much - potential silence
-                            # Only start silence detection after minimum speech duration
-                            if speech_duration >= min_speech_duration:
-                                if silence_start is None:
-                                    silence_start = time.time()
-                                    logger.debug("Silence period started (after minimum speech duration)")
-                                elif time.time() - silence_start > silence_threshold:
-                                    logger.info(f"Silence detected after {file_size} bytes - ending recording")
-                                    break
-                            else:
-                                # Still in minimum speech period, don't trigger silence detection
-                                last_file_size = file_size
-                                logger.debug(f"In minimum speech period: {speech_duration:.1f}s of {min_speech_duration}s")
-
-                time.sleep(0.1)  # Check every 100ms for better responsiveness
+                time.sleep(0.5)  # Check every 500ms
 
             # Stop MixMonitor
             stop_result = self.agi.command('EXEC StopMixMonitor')
@@ -111,7 +73,7 @@ class ProductionCallRecorder:
                     # Transcribe with ASR
                     transcript = self.asr.transcribe_file(wav_file)
 
-                    # Cleanup recording file
+                    # Cleanup
                     try:
                         os.unlink(wav_file)
                     except Exception as e:
@@ -148,12 +110,12 @@ class ProductionCallRecorder:
         """
         unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:4]}"
         record_file = f"/var/spool/asterisk/monitor/interrupt_{unique_id}"
-        wav_file = f"{record_file}.wav"  # Single file with inbound-only recording
+        wav_file = f"{record_file}.wav"
 
         logger.info(f"Starting interrupt detection: {record_file}")
 
         try:
-            # Start MixMonitor for interrupt detection (inbound-only)
+            # Start MixMonitor for interrupt detection (both directions)
             mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav'
             result = self.agi.command(mixmonitor_cmd)
 
