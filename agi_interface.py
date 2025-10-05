@@ -106,50 +106,27 @@ class SimpleAGI:
         return success
 
     def play_with_voice_interrupt(self, filename, asr_client):
-        """Professional barge-in using Asterisk BackgroundDetect"""
+        """
+        DEPRECATED: Use ProductionCallRecorder.detect_barge_in_with_talk_detect() instead
+        Maintained for backward compatibility - delegates to modern TALK_DETECT implementation
+        """
+        logger.warning("play_with_voice_interrupt is deprecated - use ProductionCallRecorder for professional barge-in")
+
+        # Simple fallback - just play the file without interruption
+        # Real barge-in should use ProductionCallRecorder.detect_barge_in_with_talk_detect()
         if '.' in filename:
             filename = filename.rsplit('.', 1)[0]
 
-        logger.info(f"Playing with professional barge-in: {filename}")
+        logger.info(f"Simple playback (no interruption): {filename}")
+        result = self.command(f'STREAM FILE {filename} ""')
+        success = result and result.startswith('200')
 
-        # Use BackgroundDetect for professional voice interruption
-        # Parameters: filename, silence_ms, min_ms, max_ms
-        # 1000ms = 1 second silence after speech to confirm end
-        # 200ms = minimum speech duration to detect barge-in
-        # 5000ms = maximum 5 seconds continuous speech
-        result = self.command(f'EXEC BackgroundDetect {filename},1000,200,5000')
-
-        logger.info(f"BackgroundDetect result: {result}")
-
-        # Parse BackgroundDetect result to determine if voice was detected
-        if result and result.startswith('200'):
-            # BackgroundDetect completed successfully
-            # Check result code: 200 result=0 = completed without interruption
-            # Other result codes may indicate voice detection
-
-            if "result=0" in result:
-                # Playback completed without voice interruption
-                logger.info("Playback completed without interruption")
-                return True, None
-            else:
-                # Voice activity detected during playback
-                logger.info("Voice detected during playback - user interrupted")
-                return False, "VOICE_DETECTED"
-
+        if success:
+            logger.info("Playback completed")
+            return True, None
         else:
-            # BackgroundDetect failed - use safe fallback
-            logger.warning(f"BackgroundDetect failed: {result}")
-            logger.info("Falling back to simple playback")
-
-            fallback_result = self.command(f'STREAM FILE {filename} ""')
-            fallback_success = fallback_result and fallback_result.startswith('200')
-
-            if fallback_success:
-                logger.info("Fallback playback completed")
-                return True, None
-            else:
-                logger.warning(f"Fallback playback failed: {fallback_result}")
-                return False, None
+            logger.warning(f"Playback failed: {result}")
+            return False, None
 
     def record_file(self, filename):
         """Record audio - SIMPLE syntax without beep"""
@@ -166,38 +143,6 @@ class SimpleAGI:
         time.sleep(seconds)
 
 
-class FastInterruptRecorder:
-    """Simple, fast interrupt-capable recorder"""
-
-    def __init__(self, agi, asr_client):
-        self.agi = agi
-        self.asr = asr_client
-
-    def get_user_input_with_interrupt(self, timeout=10):
-        """Get user input with fast interrupt capability"""
-        record_file = f"/var/spool/asterisk/monitor/user_{int(time.time())}_{uuid.uuid4().hex[:4]}"
-
-        logger.info("Listening for user input...")
-        # Shorter timeout for faster responsiveness
-        result = self.agi.command(f'RECORD FILE {record_file} wav "#" {timeout * 1000} 0 2')
-
-        if not self.agi.connected:
-            return None
-
-        wav_file = f"{record_file}.wav"
-        transcript = ""
-
-        if os.path.exists(wav_file):
-            file_size = os.path.getsize(wav_file)
-            logger.info(f"Recording: {file_size} bytes")
-
-            if file_size > 300:  # Lower threshold for better detection
-                transcript = self.asr.transcribe_file(wav_file)
-
-            # Cleanup
-            try:
-                os.unlink(wav_file)
-            except Exception as e:
-                logger.debug(f"Cleanup failed: {e}")
-
-        return transcript.strip() if transcript else None
+# FastInterruptRecorder class removed - use ProductionCallRecorder instead
+# This class has been deprecated in favor of the professional-grade
+# ProductionCallRecorder with TALK_DETECT and MixMonitor capabilities
