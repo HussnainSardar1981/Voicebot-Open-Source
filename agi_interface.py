@@ -106,23 +106,50 @@ class SimpleAGI:
         return success
 
     def play_with_voice_interrupt(self, filename, asr_client):
-        """Play audio with simple barge-in detection - no hangup issues"""
+        """Professional barge-in using Asterisk BackgroundDetect"""
         if '.' in filename:
             filename = filename.rsplit('.', 1)[0]
 
-        logger.info(f"Playing with voice interrupt (simplified): {filename}")
+        logger.info(f"Playing with professional barge-in: {filename}")
 
-        # Simple approach: Just play the file normally first
-        # This eliminates complex monitoring that was causing hangups
-        result = self.command(f'STREAM FILE {filename} ""')
-        success = result and result.startswith('200')
+        # Use BackgroundDetect for professional voice interruption
+        # Parameters: filename, silence_ms, min_ms, max_ms
+        # 1000ms = 1 second silence after speech to confirm end
+        # 200ms = minimum speech duration to detect barge-in
+        # 5000ms = maximum 5 seconds continuous speech
+        result = self.command(f'EXEC BackgroundDetect {filename},1000,200,5000')
 
-        if success:
-            logger.info("Greeting completed successfully")
-            return True, None
+        logger.info(f"BackgroundDetect result: {result}")
+
+        # Parse BackgroundDetect result to determine if voice was detected
+        if result and result.startswith('200'):
+            # BackgroundDetect completed successfully
+            # Check result code: 200 result=0 = completed without interruption
+            # Other result codes may indicate voice detection
+
+            if "result=0" in result:
+                # Playback completed without voice interruption
+                logger.info("Playback completed without interruption")
+                return True, None
+            else:
+                # Voice activity detected during playback
+                logger.info("Voice detected during playback - user interrupted")
+                return False, "VOICE_DETECTED"
+
         else:
-            logger.warning(f"Playback had issues: {result}")
-            return False, None
+            # BackgroundDetect failed - use safe fallback
+            logger.warning(f"BackgroundDetect failed: {result}")
+            logger.info("Falling back to simple playback")
+
+            fallback_result = self.command(f'STREAM FILE {filename} ""')
+            fallback_success = fallback_result and fallback_result.startswith('200')
+
+            if fallback_success:
+                logger.info("Fallback playback completed")
+                return True, None
+            else:
+                logger.warning(f"Fallback playback failed: {fallback_result}")
+                return False, None
 
     def record_file(self, filename):
         """Record audio - SIMPLE syntax without beep"""
