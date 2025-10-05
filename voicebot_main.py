@@ -15,10 +15,11 @@ from config import (
     EXIT_PHRASES, URGENT_PHRASES, VOICE_TYPES
 )
 
-# Import HTTP-based speech stack (no model loading)
-from kokoro_http_client import KokoroHTTPClient as KokoroTTSClient
-from whisper_http_client import WhisperHTTPClient as WhisperASRClient
-from ollama_client import SimpleOllamaClient
+# Import socket-based clients (no model loading)
+from socket_clients import KokoroSocketClient as KokoroTTSClient
+from socket_clients import WhisperSocketClient as WhisperASRClient
+from socket_clients import OllamaSocketClient as SimpleOllamaClient
+from socket_clients import test_socket_connection
 from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
 from audio_utils import convert_audio_for_asterisk
@@ -35,40 +36,43 @@ _ollama_client = None
 _models_loaded = False
 _model_load_lock = False
 
-def initialize_models_fast():
-    """Initialize HTTP clients - instant initialization, no model loading"""
+def initialize_socket_clients():
+    """Initialize socket clients - instant connection to persistent models"""
     global _tts_client, _asr_client, _ollama_client, _models_loaded
 
-    logger.info("🚀 INITIALIZING HTTP CLIENTS - Instant response (no model loading)...")
+    logger.info("🔌 CONNECTING TO PERSISTENT MODELS - No loading needed!")
     start_time = time.time()
 
     try:
-        # Initialize HTTP-based TTS client (no model loading)
-        logger.info("Initializing Kokoro HTTP client...")
+        # Test socket connection first
+        if not test_socket_connection():
+            logger.error("Cannot connect to model service")
+            logger.error("Make sure model warmup service is running:")
+            logger.error("python3 model_warmup_service.py")
+            _models_loaded = False
+            return
+
+        # Create socket clients (instant - no model loading)
+        logger.info("Creating TTS socket client...")
         _tts_client = KokoroTTSClient()
 
-        # Initialize Ollama client
-        logger.info("Initializing Ollama client...")
+        logger.info("Creating Ollama socket client...")
         _ollama_client = SimpleOllamaClient()
 
-        # Initialize HTTP-based ASR client (no model loading)
-        logger.info("Initializing Whisper HTTP client...")
+        logger.info("Creating ASR socket client...")
         _asr_client = WhisperASRClient()
 
         total_time = time.time() - start_time
         _models_loaded = True
-        logger.info(f"✅ HTTP CLIENTS READY in {total_time:.3f}s - No model loading needed!")
+        logger.info(f"✅ SOCKET CLIENTS READY in {total_time:.3f}s - Connected to persistent models!")
 
     except Exception as e:
-        logger.error(f"HTTP client initialization failed: {e}")
+        logger.error(f"Socket client initialization failed: {e}")
         _models_loaded = False
 
 def initialize_models_persistent():
-    """Initialize HTTP clients - delegates actual model loading to worker service"""
-    global _tts_client, _asr_client, _ollama_client, _models_loaded, _model_load_lock
-
-    # Always use fast initialization since we're using HTTP clients
-    return initialize_models_fast()
+    """Use socket clients - models already loaded by warmup service"""
+    return initialize_socket_clients()
 
 def get_preloaded_clients():
     """Get pre-loaded client instances - INSTANT for professional calls"""
@@ -125,53 +129,38 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
     return False, None
 
 def handle_greeting(agi, tts, asr, ollama):
-    """Handle the initial greeting and any interruptions - INSTANT cached playback"""
-    logger.info("Playing greeting (instant cached version)...")
+    """Handle the initial greeting and any interruptions - INSTANT via socket"""
+    logger.info("Playing greeting (instant via persistent TTS)...")
+    greeting_text = "Hello, thank you for calling NET-OH-VOH. I'm Alexis. How can I help you?"
 
-    # Use pre-generated cached greeting for instant playback
+    # Generate greeting TTS via socket (models already loaded, so fast)
+    tts_file = tts.synthesize(greeting_text, voice_type="greeting")
+
     greeting_transcript = None
+    if tts_file and os.path.exists(tts_file):
+        asterisk_file = convert_audio_for_asterisk(tts_file)
 
-    # Try cached greeting first (instant playback)
-    success, interrupt = agi.play_with_voice_interrupt("netovo_greeting", asr)
+        # Cleanup TTS file
+        try:
+            os.unlink(tts_file)
+        except Exception as e:
+            logger.debug(f"TTS file cleanup failed: {e}")
 
-    if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
-        logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
-        greeting_transcript = interrupt
-    elif interrupt:
-        logger.info("Greeting interrupted by voice")
-    elif success:
-        logger.info("Cached greeting played successfully")
-    else:
-        # Fallback: generate greeting if cached version not available
-        logger.warning("Cached greeting not available - generating fallback")
-        greeting_text = "Hello, thank you for calling NET-OH-VOH. I'm Alexis. How can I help you?"
-
-        tts_file = tts.synthesize(greeting_text, voice_type="greeting")
-
-        if tts_file and os.path.exists(tts_file):
-            asterisk_file = convert_audio_for_asterisk(tts_file)
-
-            # Cleanup TTS file
-            try:
-                os.unlink(tts_file)
-            except Exception as e:
-                logger.debug(f"TTS file cleanup failed: {e}")
-
-            if asterisk_file:
-                success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
-                if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
-                    logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
-                    greeting_transcript = interrupt
-                elif interrupt:
-                    logger.info("Greeting interrupted by voice")
-                else:
-                    logger.info(f"Generated greeting played: {success}")
+        if asterisk_file:
+            success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
+            if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
+                logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
+                greeting_transcript = interrupt
+            elif interrupt:
+                logger.info("Greeting interrupted by voice")
             else:
-                logger.error("Audio conversion failed")
-                agi.stream_file("demo-thanks")
+                logger.info(f"Greeting played: {success}")
         else:
-            logger.error("TTS greeting failed")
+            logger.error("Audio conversion failed")
             agi.stream_file("demo-thanks")
+    else:
+        logger.error("TTS greeting failed")
+        agi.stream_file("demo-thanks")
 
     # Process greeting interruption immediately
     if greeting_transcript:
@@ -340,15 +329,15 @@ def main():
         except Exception as e:
             logger.error(f"Error cleanup failed: {e}")
 
-# *** PROFESSIONAL CUSTOMER SERVICE: HTTP CLIENTS FOR INSTANT RESPONSE ***
-logger.info("=== VoiceBot Starting - HTTP clients for instant response (no model loading) ===")
+# *** PROFESSIONAL CUSTOMER SERVICE: SOCKET CLIENTS FOR PERSISTENT MODELS ***
+logger.info("=== VoiceBot Starting - Socket clients for persistent models ===")
 
-# Initialize HTTP clients (instant, no model loading)
+# Initialize socket clients (instant connection to persistent models)
 try:
     initialize_models_persistent()
-    logger.info("=== VoiceBot Ready - HTTP clients initialized, models on worker service ===")
+    logger.info("=== VoiceBot Ready - Connected to persistent models via socket ===")
 except Exception as e:
-    logger.error(f"HTTP client initialization failed: {e}")
+    logger.error(f"Socket client initialization failed: {e}")
     logger.info("=== VoiceBot Ready - Clients will initialize on first call ===")
 
 if __name__ == "__main__":
