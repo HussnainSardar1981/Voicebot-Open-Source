@@ -15,9 +15,9 @@ from config import (
     EXIT_PHRASES, URGENT_PHRASES, VOICE_TYPES
 )
 
-# Import pure open-source speech stack
-from kokoro_tts_client import KokoroTTSClient
-from whisper_asr_client import WhisperASRClient
+# Import HTTP-based speech stack (no model loading)
+from kokoro_http_client import KokoroHTTPClient as KokoroTTSClient
+from whisper_http_client import WhisperHTTPClient as WhisperASRClient
 from ollama_client import SimpleOllamaClient
 from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
@@ -36,77 +36,39 @@ _models_loaded = False
 _model_load_lock = False
 
 def initialize_models_fast():
-    """Fast model loading optimized for individual AGI calls"""
+    """Initialize HTTP clients - instant initialization, no model loading"""
     global _tts_client, _asr_client, _ollama_client, _models_loaded
 
-    logger.info("🚀 FAST MODEL LOADING - Optimized for instant response...")
+    logger.info("🚀 INITIALIZING HTTP CLIENTS - Instant response (no model loading)...")
     start_time = time.time()
 
     try:
-        # Load TTS first (needed for greeting)
-        logger.info("Loading Kokoro TTS (optimized)...")
+        # Initialize HTTP-based TTS client (no model loading)
+        logger.info("Initializing Kokoro HTTP client...")
         _tts_client = KokoroTTSClient()
 
-        # Load Ollama second (simpler)
-        logger.info("Loading Ollama client...")
+        # Initialize Ollama client
+        logger.info("Initializing Ollama client...")
         _ollama_client = SimpleOllamaClient()
 
-        # Load ASR last (heaviest model)
-        logger.info("Loading Whisper ASR (GPU-optimized)...")
+        # Initialize HTTP-based ASR client (no model loading)
+        logger.info("Initializing Whisper HTTP client...")
         _asr_client = WhisperASRClient()
 
         total_time = time.time() - start_time
         _models_loaded = True
-        logger.info(f"✅ FAST MODELS LOADED in {total_time:.1f}s - Ready for conversation!")
+        logger.info(f"✅ HTTP CLIENTS READY in {total_time:.3f}s - No model loading needed!")
 
     except Exception as e:
-        logger.error(f"Fast model loading failed: {e}")
+        logger.error(f"HTTP client initialization failed: {e}")
         _models_loaded = False
 
 def initialize_models_persistent():
-    """Pre-load all models ONCE and keep them persistent for professional performance"""
+    """Initialize HTTP clients - delegates actual model loading to worker service"""
     global _tts_client, _asr_client, _ollama_client, _models_loaded, _model_load_lock
 
-    # For AGI calls, use fast loading instead
-    if os.environ.get('AGI_CALLERID'):
-        return initialize_models_fast()
-
-    # Prevent multiple concurrent initializations
-    if _model_load_lock:
-        logger.info("Models already being loaded, waiting...")
-        return
-
-    # If already loaded, return immediately
-    if _models_loaded and _tts_client is not None and _asr_client is not None and _ollama_client is not None:
-        logger.info("Models already loaded and ready")
-        return
-
-    _model_load_lock = True
-    logger.info("🚀 PERSISTENT MODEL LOADING - Loading once for all future calls...")
-    start_time = time.time()
-
-    try:
-        if _tts_client is None:
-            logger.info("Loading Kokoro TTS client (af_heart voice)...")
-            _tts_client = KokoroTTSClient()
-
-        if _asr_client is None:
-            logger.info("Loading Whisper ASR client (Large model on GPU)...")
-            _asr_client = WhisperASRClient()
-
-        if _ollama_client is None:
-            logger.info("Loading Ollama client...")
-            _ollama_client = SimpleOllamaClient()
-
-        total_time = time.time() - start_time
-        _models_loaded = True
-        logger.info(f"✅ PERSISTENT MODELS LOADED in {total_time:.1f}s - Ready for instant calls!")
-
-    except Exception as e:
-        logger.error(f"Model loading failed: {e}")
-        _models_loaded = False
-    finally:
-        _model_load_lock = False
+    # Always use fast initialization since we're using HTTP clients
+    return initialize_models_fast()
 
 def get_preloaded_clients():
     """Get pre-loaded client instances - INSTANT for professional calls"""
@@ -163,38 +125,53 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
     return False, None
 
 def handle_greeting(agi, tts, asr, ollama):
-    """Handle the initial greeting and any interruptions - OPTIMIZED for instant response"""
-    logger.info("Playing greeting (instant)...")
-    greeting_text = "Hello, thank you for calling NET-OH-VOH. I'm Alexis. How can I help you?"
+    """Handle the initial greeting and any interruptions - INSTANT cached playback"""
+    logger.info("Playing greeting (instant cached version)...")
 
-    # Generate greeting TTS with af_heart voice for natural sound
-    tts_file = tts.synthesize(greeting_text, voice_type="greeting")
-
+    # Use pre-generated cached greeting for instant playback
     greeting_transcript = None
-    if tts_file and os.path.exists(tts_file):
-        asterisk_file = convert_audio_for_asterisk(tts_file)
 
-        # Cleanup TTS file
-        try:
-            os.unlink(tts_file)
-        except Exception as e:
-            logger.debug(f"TTS file cleanup failed: {e}")
+    # Try cached greeting first (instant playback)
+    success, interrupt = agi.play_with_voice_interrupt("netovo_greeting", asr)
 
-        if asterisk_file:
-            success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
-            if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
-                logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
-                greeting_transcript = interrupt
-            elif interrupt:
-                logger.info("Greeting interrupted by voice")
-            else:
-                logger.info(f"Greeting played: {success}")
-        else:
-            logger.error("Audio conversion failed")
-            agi.stream_file("demo-thanks")
+    if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
+        logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
+        greeting_transcript = interrupt
+    elif interrupt:
+        logger.info("Greeting interrupted by voice")
+    elif success:
+        logger.info("Cached greeting played successfully")
     else:
-        logger.error("TTS greeting failed")
-        agi.stream_file("demo-thanks")
+        # Fallback: generate greeting if cached version not available
+        logger.warning("Cached greeting not available - generating fallback")
+        greeting_text = "Hello, thank you for calling NET-OH-VOH. I'm Alexis. How can I help you?"
+
+        tts_file = tts.synthesize(greeting_text, voice_type="greeting")
+
+        if tts_file and os.path.exists(tts_file):
+            asterisk_file = convert_audio_for_asterisk(tts_file)
+
+            # Cleanup TTS file
+            try:
+                os.unlink(tts_file)
+            except Exception as e:
+                logger.debug(f"TTS file cleanup failed: {e}")
+
+            if asterisk_file:
+                success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
+                if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
+                    logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
+                    greeting_transcript = interrupt
+                elif interrupt:
+                    logger.info("Greeting interrupted by voice")
+                else:
+                    logger.info(f"Generated greeting played: {success}")
+            else:
+                logger.error("Audio conversion failed")
+                agi.stream_file("demo-thanks")
+        else:
+            logger.error("TTS greeting failed")
+            agi.stream_file("demo-thanks")
 
     # Process greeting interruption immediately
     if greeting_transcript:
@@ -363,16 +340,16 @@ def main():
         except Exception as e:
             logger.error(f"Error cleanup failed: {e}")
 
-# *** PROFESSIONAL CUSTOMER SERVICE: LOAD MODELS IMMEDIATELY FOR INSTANT RESPONSE ***
-logger.info("=== VoiceBot Starting - Pre-loading models for instant customer service ===")
+# *** PROFESSIONAL CUSTOMER SERVICE: HTTP CLIENTS FOR INSTANT RESPONSE ***
+logger.info("=== VoiceBot Starting - HTTP clients for instant response (no model loading) ===")
 
-# Pre-load models immediately when module is imported
+# Initialize HTTP clients (instant, no model loading)
 try:
     initialize_models_persistent()
-    logger.info("=== VoiceBot Ready - Models pre-loaded for instant response ===")
+    logger.info("=== VoiceBot Ready - HTTP clients initialized, models on worker service ===")
 except Exception as e:
-    logger.error(f"Initial model loading failed: {e}")
-    logger.info("=== VoiceBot Ready - Models will load on first call ===")
+    logger.error(f"HTTP client initialization failed: {e}")
+    logger.info("=== VoiceBot Ready - Clients will initialize on first call ===")
 
 if __name__ == "__main__":
     main()
