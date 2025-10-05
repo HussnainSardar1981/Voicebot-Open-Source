@@ -32,7 +32,7 @@ class ProductionCallRecorder:
         try:
             # Start MixMonitor with inbound-only direction control (Option A)
             # 'r(in)' parameter = record inbound only (user voice), prevents bot voice hallucinations
-            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,b,r(in)'
+            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav'
             result = self.agi.command(mixmonitor_cmd)
 
             if not result or not result.startswith('200'):
@@ -154,7 +154,7 @@ class ProductionCallRecorder:
 
         try:
             # Start MixMonitor for interrupt detection (inbound-only)
-            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,b,r(in)'
+            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav'
             result = self.agi.command(mixmonitor_cmd)
 
             if not result or not result.startswith('200'):
