@@ -25,14 +25,14 @@ class ProductionCallRecorder:
         """
         unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:4]}"
         record_file = f"/var/spool/asterisk/monitor/mix_{unique_id}"
-        wav_file = f"{record_file}-in.wav"  # Only monitor incoming audio (user voice)
+        wav_file = f"{record_file}.wav"  # Single file with inbound-only recording
 
         logger.info(f"Starting MixMonitor recording: {record_file}")
 
         try:
-            # Start MixMonitor with separate in/out recording to prevent hallucinations
-            # Records to separate files: -in.wav (user voice) and -out.wav (bot voice)
-            mixmonitor_cmd = f'EXEC MixMonitor {record_file}-in.wav,{record_file}-out.wav'
+            # Start MixMonitor with inbound-only direction control (Option A)
+            # 'r(in)' parameter = record inbound only (user voice), prevents bot voice hallucinations
+            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,b,r(in)'
             result = self.agi.command(mixmonitor_cmd)
 
             if not result or not result.startswith('200'):
@@ -111,24 +111,18 @@ class ProductionCallRecorder:
                     # Transcribe with ASR
                     transcript = self.asr.transcribe_file(wav_file)
 
-                    # Cleanup both incoming and outgoing files
+                    # Cleanup recording file
                     try:
-                        os.unlink(wav_file)  # -in.wav file
-                        outgoing_file = f"{record_file}-out.wav"
-                        if os.path.exists(outgoing_file):
-                            os.unlink(outgoing_file)
+                        os.unlink(wav_file)
                     except Exception as e:
                         logger.debug(f"Cleanup failed: {e}")
 
                     return transcript.strip() if transcript else None
                 else:
                     logger.info(f"Recording too small: {file_size} bytes")
-                    # Cleanup small/empty files
+                    # Cleanup small/empty file
                     try:
-                        os.unlink(wav_file)  # -in.wav file
-                        outgoing_file = f"{record_file}-out.wav"
-                        if os.path.exists(outgoing_file):
-                            os.unlink(outgoing_file)
+                        os.unlink(wav_file)
                     except:
                         pass
                     return None
@@ -142,10 +136,7 @@ class ProductionCallRecorder:
             try:
                 self.agi.command('EXEC StopMixMonitor')
                 if os.path.exists(wav_file):
-                    os.unlink(wav_file)  # -in.wav file
-                outgoing_file = f"{record_file}-out.wav"
-                if os.path.exists(outgoing_file):
-                    os.unlink(outgoing_file)  # -out.wav file
+                    os.unlink(wav_file)
             except:
                 pass
             return None
@@ -157,13 +148,13 @@ class ProductionCallRecorder:
         """
         unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:4]}"
         record_file = f"/var/spool/asterisk/monitor/interrupt_{unique_id}"
-        wav_file = f"{record_file}-in.wav"  # Only monitor incoming audio for interrupts
+        wav_file = f"{record_file}.wav"  # Single file with inbound-only recording
 
         logger.info(f"Starting interrupt detection: {record_file}")
 
         try:
-            # Start MixMonitor for interrupt detection with separate in/out
-            mixmonitor_cmd = f'EXEC MixMonitor {record_file}-in.wav,{record_file}-out.wav'
+            # Start MixMonitor for interrupt detection (inbound-only)
+            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,b,r(in)'
             result = self.agi.command(mixmonitor_cmd)
 
             if not result or not result.startswith('200'):
@@ -190,12 +181,9 @@ class ProductionCallRecorder:
                         if os.path.exists(wav_file):
                             transcript = self.asr.transcribe_file(wav_file)
 
-                            # Cleanup both files
+                            # Cleanup
                             try:
-                                os.unlink(wav_file)  # -in.wav file
-                                outgoing_file = f"{record_file}-out.wav"
-                                if os.path.exists(outgoing_file):
-                                    os.unlink(outgoing_file)
+                                os.unlink(wav_file)
                             except:
                                 pass
 
@@ -209,13 +197,10 @@ class ProductionCallRecorder:
             # No interruption detected
             self.agi.command('EXEC StopMixMonitor')
 
-            # Cleanup both files
+            # Cleanup
             try:
                 if os.path.exists(wav_file):
-                    os.unlink(wav_file)  # -in.wav file
-                outgoing_file = f"{record_file}-out.wav"
-                if os.path.exists(outgoing_file):
-                    os.unlink(outgoing_file)
+                    os.unlink(wav_file)
             except:
                 pass
 
@@ -227,10 +212,7 @@ class ProductionCallRecorder:
             try:
                 self.agi.command('EXEC StopMixMonitor')
                 if os.path.exists(wav_file):
-                    os.unlink(wav_file)  # -in.wav file
-                outgoing_file = f"{record_file}-out.wav"
-                if os.path.exists(outgoing_file):
-                    os.unlink(outgoing_file)  # -out.wav file
+                    os.unlink(wav_file)
             except:
                 pass
             return False, None
