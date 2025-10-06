@@ -51,7 +51,7 @@ class ProductionCallRecorder:
         self.asr = asr_client
         self.min_speech_bytes = 600  # Minimum viable audio for 8kHz PCM
         self.max_speech_bytes = 200_000  # Reasonable upper limit
-        self.trailing_silence_checks = 6  # Number of consecutive no-growth checks (600ms)
+        self.trailing_silence_checks = 5  # Number of consecutive no-growth checks (600ms)
         self.guard_window_ms = 800  # Guard window after speech start (ms)
 
     def get_user_input_with_mixmonitor(self, timeout=10):
@@ -67,13 +67,14 @@ class ProductionCallRecorder:
 
         try:
             # Start MixMonitor (no ',b' / no direction flags; sequencing keeps us clean)
-            result = self.agi.command(f'EXEC MixMonitor {record_file}.wav')
+            result = self.agi.command(f'EXEC MixMonitor {record_file}.wav,b')
             if not result or not result.startswith('200'):
                 logger.error(f"Failed to start MixMonitor: {result}")
                 return None
 
             start_time = time.time()
             speech_started = False
+            first_voice_deadline = start_time + 1.0   # hard 1s limit to hear first speech
             speech_start_time = None
             last_size = 0
             consecutive_no_growth = 0
@@ -106,6 +107,9 @@ class ProductionCallRecorder:
                                 consecutive_no_growth = 0
                         else:
                             consec_growth = 0
+                        if not speech_started and time.time() > first_voice_deadline:
+                            logger.info("No speech detected in first 1.0s - stopping early")
+                            break
                         time.sleep(0.1)
                         continue
                     # --- END: growth-based speech start gate ---
@@ -187,7 +191,7 @@ class ProductionCallRecorder:
 
         try:
             # Tuned for PSTN/SIP: speech >=120 ms and <=9000 ms, then >=500 ms silence
-            detect_cmd = f'EXEC BackgroundDetect {audio_file},500,120,9000'
+            detect_cmd = f'EXEC BackgroundDetect {audio_file},400,120,9000'
             logger.info(f"Running BackgroundDetect: {detect_cmd}")
             result = self.agi.command(detect_cmd)
             logger.info(f"BackgroundDetect result: {result}")
