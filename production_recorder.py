@@ -50,6 +50,7 @@ class ProductionCallRecorder:
 
         last = self._file_size(recording_path)
         start_t = time.time()
+        saw_voice = False
 
         # Ensure we at least see some voice
         while self._file_size(recording_path) < min_bytes and self.agi.connected:
@@ -58,6 +59,13 @@ class ProductionCallRecorder:
             time.sleep(poll_ms / 1000.0)
             if time.time() - start_t > 30:
                 break
+        # Check if we reached the required minimum bytes (voice seen)
+        if self._file_size(recording_path) >= min_bytes:
+            saw_voice = True
+
+        # If we never saw voice, do not declare EOS; wait for timeout at caller
+        if not saw_voice:
+            return False
 
         # Now wait for growth to stall
         stable_for_ms = 0
