@@ -248,7 +248,7 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                 post_reply_input = recorder.conversation_flow_with_post_reply_window(
                     asterisk_file,
                     listen_timeout=CONVERSATION_CONFIG["input_timeout"],
-                    post_reply_window=2  # 2 second post-reply window - snappier feel
+                    post_reply_window=1.2  # 2 second post-reply window - snappier feel
                 )
 
                 if post_reply_input:
