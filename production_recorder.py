@@ -207,6 +207,16 @@ class ProductionCallRecorder:
                 pass
 
             return False, None
+        except Exception as e:
+            logger.error(f"Interrupt recording error: {e}")
+            # Cleanup
+            try:
+                self.agi.command('EXEC StopMixMonitor')
+                if os.path.exists(wav_file):
+                    os.unlink(wav_file)
+            except Exception:
+                pass
+            return False, None
 
     # --- Background interrupt monitor for barge-in during TTS ---
     @dataclass
