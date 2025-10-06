@@ -253,8 +253,14 @@ class ProductionCallRecorder:
                         txt = self.asr.transcribe_file(wav_file) or ""
                     except Exception:
                         txt = ""
-                    result.transcript = txt
-                    result.activated = True
+                    # Only mark as activated if we actually captured caller speech
+                    txt_clean = txt.strip()
+                    if txt_clean:
+                        result.transcript = txt_clean
+                        result.activated = True
+                    else:
+                        result.transcript = ""
+                        result.activated = False
             finally:
                 try:
                     self.agi.command('EXEC StopMixMonitor')
