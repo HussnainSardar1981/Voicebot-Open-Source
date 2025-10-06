@@ -152,7 +152,7 @@ def handle_greeting(agi, tts, asr, ollama, recorder: ProductionCallRecorder):
     th, stop_ev, intr_res = recorder.start_interrupt_monitor(window_sec=6)
 
     def _check_stop():
-        return intr_res.activated
+        return bool(intr_res.activated and intr_res.transcript)
 
     status = play_chunks_with_interrupt(agi, tts, greeting_text, voice_type="greeting", check_stop=_check_stop)
 
@@ -243,7 +243,7 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
         th, stop_ev, intr_res = recorder.start_interrupt_monitor(window_sec=6)
 
         def _check_stop_turn():
-            return intr_res.activated
+            return bool(intr_res.activated and intr_res.transcript)
 
         status = play_chunks_with_interrupt(agi, tts, response, voice_type=voice_type, check_stop=_check_stop_turn)
 
