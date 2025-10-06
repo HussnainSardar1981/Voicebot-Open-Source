@@ -248,7 +248,7 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                 post_reply_input = recorder.conversation_flow_with_post_reply_window(
                     asterisk_file,
                     listen_timeout=CONVERSATION_CONFIG["input_timeout"],
-                    post_reply_window=4  # 4 second post-reply window
+                    post_reply_window=2  # 2 second post-reply window - snappier feel
                 )
 
                 if post_reply_input:
@@ -256,6 +256,12 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                     # Process the additional input
                     response = ollama.generate(post_reply_input)
                     continue  # Go back to play new response
+                else:
+                    # Post-reply window returned empty - NOW check exit conditions
+                    # This is the key fix: honor AI exit only after post-reply window is empty
+                    if should_exit and exit_reason in ["ai_exit", "user_exit"]:
+                        logger.info(f"Confirmed exit after empty post-reply window: {exit_reason}")
+                        break
 
             else:
                 # Fallback to built-in sound
@@ -264,12 +270,8 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             # Fallback to built-in sound
             agi.stream_file("demo-thanks")
 
-        # Check exit conditions ONLY after post-reply window completes
-        # This prevents premature exits when caller speaks late
-        if should_exit and exit_reason in ["ai_exit", "user_exit"]:
-            logger.info(f"Confirmed exit after post-reply window: {exit_reason}")
-            break
-        elif should_exit:
+        # Check non-conversational exit conditions (timeouts, failures) immediately
+        if should_exit and exit_reason not in ["ai_exit", "user_exit"]:
             # Non-exit related issues (timeouts, failures) - exit immediately
             logger.info(f"Exiting conversation: {exit_reason}")
             break
