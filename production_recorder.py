@@ -23,7 +23,7 @@ class ProductionCallRecorder:
     # --- End-of-speech tuning knobs ---
     _EOS_IDLE_MS = 800       # no growth for this long => end-of-speech
     _EOS_POLL_MS = 120       # polling interval
-    _MIN_SPEECH_BYTES = 8192 # ignore tiny blips/breaths
+    _MIN_SPEECH_BYTES = 4096 # ignore tiny blips/breaths but catch short replies
 
     @staticmethod
     def _file_size(path: str) -> int:
@@ -89,7 +89,8 @@ class ProductionCallRecorder:
         try:
             # Start MixMonitor: also record receive-only stream to a separate file
             # Using r(file) per Asterisk docs so we can monitor caller-only audio
-            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,r({record_file}_rx.wav)'
+            mm_var = f"MMID_{unique_id}"
+            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,r({record_file}_rx.wav),i({mm_var})'
             result = self.agi.command(mixmonitor_cmd)
 
             if not result or not result.startswith('200'):
@@ -104,7 +105,7 @@ class ProductionCallRecorder:
             self._wait_for_end_of_speech(rx_wav_file, deadline_ts=deadline)
 
             # Stop MixMonitor
-            stop_result = self.agi.command('EXEC StopMixMonitor')
+            stop_result = self.agi.command(f'EXEC StopMixMonitor ${{{mm_var}}}')
             logger.info(f"MixMonitor stopped: {stop_result}")
 
             # Small delay to ensure file is written
@@ -147,7 +148,7 @@ class ProductionCallRecorder:
             logger.error(f"MixMonitor recording error: {e}")
             # Ensure cleanup
             try:
-                self.agi.command('EXEC StopMixMonitor')
+                self.agi.command(f'EXEC StopMixMonitor ${{{mm_var}}}')
                 if os.path.exists(wav_file):
                     os.unlink(wav_file)
                 if os.path.exists(rx_wav_file):
@@ -170,7 +171,8 @@ class ProductionCallRecorder:
 
         try:
             # Start MixMonitor for interrupt detection; also capture RX-only stream
-            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,r({record_file}_rx.wav)'
+            mm_var = f"MMID_{unique_id}"
+            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,r({record_file}_rx.wav),i({mm_var})'
             result = self.agi.command(mixmonitor_cmd)
 
             if not result or not result.startswith('200'):
@@ -189,8 +191,8 @@ class ProductionCallRecorder:
                     if file_size > 200:  # Voice detected - lower threshold
                         logger.info(f"Voice interrupt detected: {file_size} bytes")
 
-                        # Stop recording
-                        self.agi.command('EXEC StopMixMonitor')
+                        # Stop recording (specific instance)
+                        self.agi.command(f'EXEC StopMixMonitor ${{{mm_var}}}')
                         time.sleep(0.1)
 
                         # Transcribe interruption from RX-only file
@@ -214,7 +216,7 @@ class ProductionCallRecorder:
                 time.sleep(0.1)  # Check every 100ms for fast response
 
             # No interruption detected
-            self.agi.command('EXEC StopMixMonitor')
+            self.agi.command(f'EXEC StopMixMonitor ${{{mm_var}}}')
 
             # Cleanup
             try:
@@ -230,9 +232,11 @@ class ProductionCallRecorder:
             logger.error(f"Interrupt recording error: {e}")
             # Cleanup
             try:
-                self.agi.command('EXEC StopMixMonitor')
+                self.agi.command(f'EXEC StopMixMonitor ${{{mm_var}}}')
                 if os.path.exists(wav_file):
                     os.unlink(wav_file)
+                if os.path.exists(rx_wav_file):
+                    os.unlink(rx_wav_file)
             except Exception:
                 pass
             return False, None
@@ -248,14 +252,17 @@ class ProductionCallRecorder:
         Returns (thread, stop_event, result_holder)."""
         unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:4]}"
         record_file = f"/var/spool/asterisk/monitor/barge_{unique_id}"
-        wav_file = f"{record_file}.wav"
+        wav_file = f"{record_file}.wav"           # mixed
+        rx_wav_file = f"{record_file}_rx.wav"     # inbound-only
+        mm_id_var = f"MMID_{unique_id}"
 
         stop_event = threading.Event()
         result = ProductionCallRecorder.InterruptResult()
 
         def _runner():
             try:
-                self.agi.command(f'EXEC MixMonitor {record_file}.wav')
+                # Start MixMonitor capturing mixed and RX-only, store ID in chan var
+                self.agi.command(f'EXEC MixMonitor {record_file}.wav,r({record_file}_rx.wav),i({mm_id_var})')
                 t0 = time.time()
                 voice_seen = False
                 while not stop_event.is_set() and (time.time() - t0) < window_sec and self.agi.connected:
@@ -263,7 +270,7 @@ class ProductionCallRecorder:
                     if arm_delay_ms and ((time.time() - t0) * 1000.0) < arm_delay_ms:
                         time.sleep(0.05)
                         continue
-                    sz = self._file_size(wav_file)
+                    sz = self._file_size(rx_wav_file)
                     if sz >= min_bytes:
                         voice_seen = True
                         break
@@ -271,9 +278,9 @@ class ProductionCallRecorder:
 
                 if voice_seen:
                     # user started speaking: wait a bit shorter for EOS to capture phrase
-                    self._wait_for_end_of_speech(wav_file, min_bytes=max(1, min_bytes // 2), idle_ms=600)
+                    self._wait_for_end_of_speech(rx_wav_file, min_bytes=max(1, min_bytes // 2), idle_ms=600)
                     try:
-                        txt = self.asr.transcribe_file(wav_file) or ""
+                        txt = self.asr.transcribe_file(rx_wav_file) or ""
                     except Exception:
                         txt = ""
                     # Only mark as activated if we actually captured caller speech
@@ -286,13 +293,16 @@ class ProductionCallRecorder:
                         result.activated = False
             finally:
                 try:
-                    self.agi.command('EXEC StopMixMonitor')
+                    # Stop only this instance using stored ID
+                    self.agi.command(f'EXEC StopMixMonitor ${{{mm_id_var}}}')
                 except Exception:
                     pass
                 # cleanup temp barge recording to avoid disk bloat
                 try:
                     if os.path.exists(wav_file):
                         os.unlink(wav_file)
+                    if os.path.exists(rx_wav_file):
+                        os.unlink(rx_wav_file)
                 except Exception:
                     pass
 
