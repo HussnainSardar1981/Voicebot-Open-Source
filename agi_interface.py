@@ -233,7 +233,7 @@ def _chunk_text_for_tts(text: str, max_chars: int = 140):
     return [p.strip() for p in parts if p.strip()]
 
 def play_chunks_with_interrupt(agi: SimpleAGI, tts_client, text: str, voice_type: str = "default",
-                               check_stop=lambda: False):
+                               check_stop=lambda: False, on_chunk_played=None):
     """Synthesize small chunks and play them one-by-one.
     Between chunks, check stop flag; if set, abort immediately.
     tts_client.synthesize should return a WAV path compatible with stream_external_wav.
@@ -246,5 +246,10 @@ def play_chunks_with_interrupt(agi: SimpleAGI, tts_client, text: str, voice_type
         if not wav_file:
             continue
         agi.stream_external_wav(wav_file)
+        if on_chunk_played is not None:
+            try:
+                on_chunk_played(ch)
+            except Exception:
+                pass
         time.sleep(0.02)
     return "OK"
