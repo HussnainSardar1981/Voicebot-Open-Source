@@ -1,0 +1,21 @@
+[Unit]
+Description=NETOVO VoiceBot Model Warmup Service
+After=network.target
+
+[Service]
+Type=simple
+User=aiadmin
+Group=aiadmin
+WorkingDirectory=/home/aiadmin/netovo_voicebot/kokora
+ExecStart=/home/aiadmin/netovo_voicebot/venv/bin/python3 /home/aiadmin/netovo_voicebot/kokora/model_warmup_service.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PYTHONPATH=/home/aiadmin/netovo_voicebot/kokora
+Environment=CUDA_VISIBLE_DEVICES=0
+
+[Install]
+WantedBy=multi-user.target
