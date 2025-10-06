@@ -229,12 +229,11 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             transcript, response, no_response_count, failed_interactions, start_time
         )
 
-        # Speak response
+        # Use professional conversation flow with post-reply listen window
         logger.info(f"Responding: {response[:30]}...")
 
         voice_type = determine_voice_type(response)
         tts_file = tts.synthesize(response, voice_type=voice_type)
-        interrupt_transcript = None
 
         if tts_file and os.path.exists(tts_file):
             asterisk_file = convert_audio_for_asterisk(tts_file)
@@ -245,17 +244,19 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                 logger.debug(f"TTS file cleanup failed: {e}")
 
             if asterisk_file:
-                # Use ProductionCallRecorder for professional barge-in detection
-                interrupted = recorder.play_with_barge_in(asterisk_file, timeout=CONVERSATION_CONFIG["input_timeout"])
+                # Use professional conversation flow with post-reply window
+                post_reply_input = recorder.conversation_flow_with_post_reply_window(
+                    asterisk_file,
+                    listen_timeout=CONVERSATION_CONFIG["input_timeout"],
+                    post_reply_window=4  # 4 second post-reply window
+                )
 
-                if interrupted:
-                    logger.info("Response interrupted by voice - getting clean recording")
-                    # Get clean user input after interruption
-                    interrupt_transcript = recorder.get_user_input_with_mixmonitor(timeout=8)
-                    if interrupt_transcript:
-                        logger.info(f"Response interrupted with: {interrupt_transcript[:30]}...")
-                    else:
-                        logger.info("Response interrupted but no clear speech detected")
+                if post_reply_input:
+                    logger.info(f"Post-reply input received: {post_reply_input[:30]}...")
+                    # Process the additional input
+                    response = ollama.generate(post_reply_input)
+                    continue  # Go back to play new response
+
             else:
                 # Fallback to built-in sound
                 agi.stream_file("demo-thanks")
@@ -263,14 +264,13 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             # Fallback to built-in sound
             agi.stream_file("demo-thanks")
 
-        # If response was interrupted, process the new input immediately
-        if interrupt_transcript:
-            logger.info("Processing voice interruption...")
-            response = ollama.generate(interrupt_transcript)
-            continue  # Go back to play new response
-
-        # Check exit conditions after response
-        if should_exit:
+        # Check exit conditions ONLY after post-reply window completes
+        # This prevents premature exits when caller speaks late
+        if should_exit and exit_reason in ["ai_exit", "user_exit"]:
+            logger.info(f"Confirmed exit after post-reply window: {exit_reason}")
+            break
+        elif should_exit:
+            # Non-exit related issues (timeouts, failures) - exit immediately
             logger.info(f"Exiting conversation: {exit_reason}")
             break
 
