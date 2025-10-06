@@ -35,9 +35,12 @@ class ProductionCallRecorder:
     def _wait_for_end_of_speech(self, recording_path: str,
                                 min_bytes: int = None,
                                 idle_ms: int = None,
-                                poll_ms: int = None) -> None:
+                                poll_ms: int = None,
+                                deadline_ts: float = None) -> bool:
         """Blocks until the recording file stops growing for idle_ms and
-        has at least min_bytes (avoids stopping on breaths)."""
+        has at least min_bytes (avoids stopping on breaths).
+        Returns True if EOS observed before deadline; False if deadline exceeded.
+        """
         if min_bytes is None:
             min_bytes = self._MIN_SPEECH_BYTES
         if idle_ms is None:
@@ -49,14 +52,18 @@ class ProductionCallRecorder:
         start_t = time.time()
 
         # Ensure we at least see some voice
-        while self._file_size(recording_path) < min_bytes:
+        while self._file_size(recording_path) < min_bytes and self.agi.connected:
+            if deadline_ts is not None and time.time() >= deadline_ts:
+                return False
             time.sleep(poll_ms / 1000.0)
             if time.time() - start_t > 30:
                 break
 
         # Now wait for growth to stall
         stable_for_ms = 0
-        while True:
+        while self.agi.connected:
+            if deadline_ts is not None and time.time() >= deadline_ts:
+                return False
             time.sleep(poll_ms / 1000.0)
             cur = self._file_size(recording_path)
             if cur > last:
@@ -65,7 +72,7 @@ class ProductionCallRecorder:
             else:
                 stable_for_ms += poll_ms
                 if stable_for_ms >= idle_ms:
-                    return
+                    return True
 
     def get_user_input_with_mixmonitor(self, timeout=10):
         """
@@ -91,11 +98,8 @@ class ProductionCallRecorder:
             logger.info(f"MixMonitor started, waiting up to {timeout}s for end-of-speech...")
 
             # Wait for EOS or timeout
-            start_time = time.time()
-            while time.time() - start_time < timeout and self.agi.connected:
-                # Block until EOS (no file growth) then break
-                self._wait_for_end_of_speech(wav_file)
-                break
+            deadline = time.time() + float(timeout)
+            self._wait_for_end_of_speech(wav_file, deadline_ts=deadline)
 
             # Stop MixMonitor
             stop_result = self.agi.command('EXEC StopMixMonitor')
@@ -224,7 +228,7 @@ class ProductionCallRecorder:
         activated: bool = False
         transcript: str = ""
 
-    def start_interrupt_monitor(self, window_sec=5, min_bytes=4096):
+    def start_interrupt_monitor(self, window_sec=5, min_bytes=4096, arm_delay_ms=0):
         """Start a short MixMonitor in background to detect caller voice during TTS.
         Returns (thread, stop_event, result_holder)."""
         unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:4]}"
@@ -240,6 +244,10 @@ class ProductionCallRecorder:
                 t0 = time.time()
                 voice_seen = False
                 while not stop_event.is_set() and (time.time() - t0) < window_sec and self.agi.connected:
+                    # Arm delay window to ignore initial bot audio
+                    if arm_delay_ms and ((time.time() - t0) * 1000.0) < arm_delay_ms:
+                        time.sleep(0.05)
+                        continue
                     sz = self._file_size(wav_file)
                     if sz >= min_bytes:
                         voice_seen = True
