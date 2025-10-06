@@ -50,14 +50,14 @@ class ProductionCallRecorder:
         self.agi = agi
         self.asr = asr_client
         self.min_speech_bytes = 600  # Minimum viable audio for 8kHz PCM
-        self.max_speech_bytes = 50000  # Reasonable upper limit
+        self.max_speech_bytes = 200_000  # Reasonable upper limit
         self.trailing_silence_checks = 6  # Number of consecutive no-growth checks (600ms)
         self.guard_window_ms = 800  # Guard window after speech start (ms)
 
     def get_user_input_with_mixmonitor(self, timeout=10):
         """
-        Production-grade user input recording using MixMonitor with trailing silence detection
-        Records only during silent windows to prevent self-transcription
+        Production-grade user input recording using MixMonitor with trailing silence detection.
+        Records only during silent windows to prevent self-transcription.
         """
         unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:4]}"
         record_file = f"/var/spool/asterisk/monitor/clean_{unique_id}"
@@ -66,127 +66,106 @@ class ProductionCallRecorder:
         logger.info(f"Starting clean MixMonitor recording: {record_file}")
 
         try:
-            # Start MixMonitor WITHOUT bidirectional flag - records caller-focused audio
-            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav'
-            result = self.agi.command(mixmonitor_cmd)
-
+            # Start MixMonitor (no ',b' / no direction flags; sequencing keeps us clean)
+            result = self.agi.command(f'EXEC MixMonitor {record_file}.wav')
             if not result or not result.startswith('200'):
                 logger.error(f"Failed to start MixMonitor: {result}")
                 return None
 
-            logger.info(f"MixMonitor started, implementing trailing silence detection...")
-
-            # Implement professional trailing silence detection
             start_time = time.time()
             speech_started = False
             speech_start_time = None
             last_size = 0
             consecutive_no_growth = 0
+            consec_growth = 0
+
+            GROWTH_BYTES_PER_TICK = 1000   # ~100ms real speech at 8kHz PCM
+            NO_GROWTH_TICKS_TO_END = self.trailing_silence_checks  # 6 → 600 ms
+            GUARD_MS = self.guard_window_ms  # 800 ms
 
             while time.time() - start_time < timeout:
                 if not self.agi.connected:
                     logger.info("Call disconnected during recording")
                     break
 
-                current_time = time.time()
+                now = time.time()
 
-                # Check file size
                 if os.path.exists(wav_file):
                     current_size = os.path.getsize(wav_file)
+                    growth = current_size - last_size
+                    last_size = current_size
 
-                    # Detect speech start (first meaningful growth)
-                    if not speech_started and current_size > 300:
-                        speech_started = True
-                        speech_start_time = current_time
-                        logger.info(f"Speech detected at {current_size} bytes")
-                        last_size = current_size
-                        consecutive_no_growth = 0
-
-                    elif speech_started:
-                        # We're in speech - check for trailing silence
-                        guard_elapsed = (current_time - speech_start_time) * 1000
-
-                        # Protect guard window - don't finalize too early
-                        if guard_elapsed < self.guard_window_ms:
-                            last_size = current_size
-                            consecutive_no_growth = 0
-                        else:
-                            # After guard window, look for trailing silence
-                            if current_size <= last_size + 50:  # No meaningful growth
-                                consecutive_no_growth += 1
-                                logger.debug(f"No growth detected: {consecutive_no_growth}/{self.trailing_silence_checks}")
-
-                                if consecutive_no_growth >= self.trailing_silence_checks:
-                                    logger.info(f"Trailing silence detected after {current_size} bytes")
-                                    break
-                            else:
-                                # Growth detected - reset silence counter
+                    # --- START: growth-based speech start gate ---
+                    if not speech_started:
+                        if growth >= GROWTH_BYTES_PER_TICK:
+                            consec_growth += 1
+                            if consec_growth >= 2:
+                                speech_started = True
+                                speech_start_time = now
+                                logger.info(f"Speech detected at {current_size} bytes (growth-based)")
                                 consecutive_no_growth = 0
-                                last_size = current_size
+                        else:
+                            consec_growth = 0
+                        time.sleep(0.1)
+                        continue
+                    # --- END: growth-based speech start gate ---
 
-                            # Hard cap protection
-                            if current_size > self.max_speech_bytes:
-                                logger.info(f"Hard cap reached at {current_size} bytes")
+                    guard_elapsed_ms = (now - speech_start_time) * 1000
+                    if guard_elapsed_ms < GUARD_MS:
+                        consecutive_no_growth = 0
+                    else:
+                        # use growth, not current_size vs last_size
+                        if growth <= 50:
+                            consecutive_no_growth += 1
+                            if consecutive_no_growth >= NO_GROWTH_TICKS_TO_END:
+                                logger.info(f"Trailing silence detected after {current_size} bytes")
                                 break
+                        else:
+                            consecutive_no_growth = 0
 
-                time.sleep(0.1)  # Check every 100ms for responsive detection
+                        if current_size > self.max_speech_bytes:
+                            logger.info(f"Hard cap reached at {current_size} bytes")
+                            break
 
-            # Stop MixMonitor and ensure file completion
+                time.sleep(0.1)
+
             stop_result = self.agi.command('EXEC StopMixMonitor')
             logger.info(f"MixMonitor stopped: {stop_result}")
 
-            # Professional flush/settle - ensure file is complete (ENHANCED)
-            time.sleep(0.5)  # Extended initial settle time
-
-            if os.path.exists(wav_file):
-                file_size = os.path.getsize(wav_file)
-
-                # Enhanced retry logic for better reliability
-                if file_size < 1000:  # More generous first check
-                    logger.debug(f"File size {file_size} small, waiting additional 0.3s")
-                    time.sleep(0.3)
-                    file_size = os.path.getsize(wav_file)
-
-                    # Second retry if still very small
-                    if file_size < 600:
-                        logger.debug(f"File size {file_size} still small, final 0.2s wait")
-                        time.sleep(0.2)
-                        file_size = os.path.getsize(wav_file)
-
-                logger.info(f"Final recording: {file_size} bytes")
-
-                # Enhanced minimum thresholds for better detection
-                min_viable = 800  # Increased from 600 for better reliability
-                if file_size >= min_viable:
-                    # Transcribe with ASR
-                    transcript = self.asr.transcribe_file(wav_file)
-
-                    # Cleanup
-                    try:
-                        os.unlink(wav_file)
-                    except Exception as e:
-                        logger.debug(f"Cleanup failed: {e}")
-
-                    if transcript and len(transcript.strip()) > 0:
-                        return transcript.strip()
-                    else:
-                        logger.info(f"ASR returned empty transcript for {file_size} byte file")
-                        return None
-                else:
-                    logger.info(f"Recording below minimum threshold: {file_size} bytes (need ≥{min_viable})")
-                    # Cleanup small/empty file
-                    try:
-                        os.unlink(wav_file)
-                    except:
-                        pass
-                    return None
-            else:
+            # Flush / settle so file is fully available
+            time.sleep(0.5)
+            if not os.path.exists(wav_file):
                 logger.warning("No recording file created")
+                return None
+
+            size = os.path.getsize(wav_file)
+            if size < 1000:
+                time.sleep(0.3)
+                size = os.path.getsize(wav_file)
+            if size < 600:
+                time.sleep(0.2)
+                size = os.path.getsize(wav_file)
+
+            logger.info(f"Final recording: {size} bytes")
+            min_viable = 800  # keep modest; do NOT raise to 1200+ unless line is noisy
+
+            if size >= min_viable:
+                transcript = self.asr.transcribe_file(wav_file)
+                try:
+                    os.unlink(wav_file)
+                except Exception as e:
+                    logger.debug(f"Cleanup failed: {e}")
+                return transcript.strip() if transcript and transcript.strip() else None
+            else:
+                logger.info(f"Recording below minimum threshold: {size} bytes (need ≥{min_viable})")
+                try:
+                    os.unlink(wav_file)
+                except:
+                    pass
                 return None
 
         except Exception as e:
             logger.error(f"MixMonitor recording error: {e}")
-            # Ensure cleanup
             try:
                 self.agi.command('EXEC StopMixMonitor')
                 if os.path.exists(wav_file):
@@ -195,10 +174,11 @@ class ProductionCallRecorder:
                 pass
             return None
 
+
     def detect_barge_in_with_background_detect(self, audio_file, timeout=10):
         """
-        Professional barge-in detection using BackgroundDetect (FIXED - no AGI blocking)
-        BackgroundDetect runs detection internally and returns immediately when speech detected
+        Professional barge-in detection using BackgroundDetect.
+        BackgroundDetect runs detection internally and returns immediately when speech is detected.
         """
         if '.' in audio_file:
             audio_file = audio_file.rsplit('.', 1)[0]
@@ -206,46 +186,54 @@ class ProductionCallRecorder:
         logger.info(f"Starting BackgroundDetect barge-in for: {audio_file}")
 
         try:
-            # Use BackgroundDetect with professional parameters:
-            # silence_ms: 800ms silence after speech to confirm end
-            # min_ms: 200ms minimum speech duration to detect barge-in
-            # max_ms: 7000ms maximum continuous speech before auto-cutoff
-            detect_cmd = f'EXEC BackgroundDetect {audio_file},800,200,7000'
-
+            # Tuned for PSTN/SIP: speech >=120 ms and <=9000 ms, then >=500 ms silence
+            detect_cmd = f'EXEC BackgroundDetect {audio_file},500,120,9000'
             logger.info(f"Running BackgroundDetect: {detect_cmd}")
             result = self.agi.command(detect_cmd)
-
             logger.info(f"BackgroundDetect result: {result}")
 
-            # Parse BackgroundDetect result
-            if result and result.startswith('200'):
-                if "result=0" in result:
-                    # Playback completed without interruption
-                    logger.info("BackgroundDetect: Playback completed without interruption")
-                    return False, None
-                else:
-                    # Voice activity detected during playback - BackgroundDetect stopped
-                    logger.info("BackgroundDetect: Voice detected - playback interrupted")
-                    return True, "INTERRUPTED"
-            else:
-                # BackgroundDetect failed - fallback to simple playback
-                logger.warning(f"BackgroundDetect failed: {result}, using fallback")
-                fallback_result = self.agi.command(f'STREAM FILE {audio_file} ""')
-                if fallback_result and fallback_result.startswith('200'):
+            # If AGI failed, do a simple playback as a fallback and report "no interruption"
+            if not result or not result.startswith('200'):
+                logger.warning(f"BackgroundDetect AGI error: {result}")
+                fb = self.agi.command(f'STREAM FILE {audio_file} ""')
+                if fb and fb.startswith('200'):
                     logger.info("Fallback playback completed")
-                    return False, None
                 else:
-                    logger.error(f"Fallback playback failed: {fallback_result}")
-                    return False, None
+                    logger.error(f"Fallback playback failed: {fb}")
+                return False, None
+
+            # Extract the numeric result safely
+            code = None
+            try:
+                # Expect patterns like "200 result=1" or "200 result=0"
+                if "result=" in result:
+                    code = int(result.split("result=")[1].split()[0])
+            except Exception:
+                code = None
+
+            # Handle explicit cases
+            if code is None:
+                logger.info("BackgroundDetect: Unknown response, treating as no interruption")
+                return False, None
+            if code < 0:
+                logger.warning("BackgroundDetect: hangup or error")
+                return False, None
+            if code == 0:
+                logger.info("BackgroundDetect: Playback completed without interruption")
+                return False, None
+
+            # Positive code → talk detected (playback aborted)
+            logger.info("BackgroundDetect: Voice detected - playback interrupted")
+            return True, "INTERRUPTED"
 
         except Exception as e:
             logger.error(f"BackgroundDetect barge-in error: {e}")
-            # Ensure cleanup
             try:
                 self.agi.command('EXEC StopPlayback')
             except:
                 pass
             return False, None
+
 
     def play_with_barge_in(self, audio_file, timeout=10):
         """
