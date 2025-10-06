@@ -135,21 +135,29 @@ class ProductionCallRecorder:
             stop_result = self.agi.command('EXEC StopMixMonitor')
             logger.info(f"MixMonitor stopped: {stop_result}")
 
-            # Professional flush/settle - ensure file is complete
-            time.sleep(0.4)  # Initial settle time
+            # Professional flush/settle - ensure file is complete (ENHANCED)
+            time.sleep(0.5)  # Extended initial settle time
 
             if os.path.exists(wav_file):
                 file_size = os.path.getsize(wav_file)
 
-                # If file is suspiciously small, give it another chance
-                if file_size < self.min_speech_bytes:
-                    logger.debug(f"File size {file_size} below minimum, waiting additional 0.25s")
-                    time.sleep(0.25)
+                # Enhanced retry logic for better reliability
+                if file_size < 1000:  # More generous first check
+                    logger.debug(f"File size {file_size} small, waiting additional 0.3s")
+                    time.sleep(0.3)
                     file_size = os.path.getsize(wav_file)
+
+                    # Second retry if still very small
+                    if file_size < 600:
+                        logger.debug(f"File size {file_size} still small, final 0.2s wait")
+                        time.sleep(0.2)
+                        file_size = os.path.getsize(wav_file)
 
                 logger.info(f"Final recording: {file_size} bytes")
 
-                if file_size >= self.min_speech_bytes:
+                # Enhanced minimum thresholds for better detection
+                min_viable = 800  # Increased from 600 for better reliability
+                if file_size >= min_viable:
                     # Transcribe with ASR
                     transcript = self.asr.transcribe_file(wav_file)
 
@@ -159,9 +167,13 @@ class ProductionCallRecorder:
                     except Exception as e:
                         logger.debug(f"Cleanup failed: {e}")
 
-                    return transcript.strip() if transcript else None
+                    if transcript and len(transcript.strip()) > 0:
+                        return transcript.strip()
+                    else:
+                        logger.info(f"ASR returned empty transcript for {file_size} byte file")
+                        return None
                 else:
-                    logger.info(f"Recording below minimum threshold: {file_size} bytes")
+                    logger.info(f"Recording below minimum threshold: {file_size} bytes (need ≥{min_viable})")
                     # Cleanup small/empty file
                     try:
                         os.unlink(wav_file)
@@ -183,74 +195,54 @@ class ProductionCallRecorder:
                 pass
             return None
 
-    def detect_barge_in_with_talk_detect(self, audio_file, timeout=3):
+    def detect_barge_in_with_background_detect(self, audio_file, timeout=10):
         """
-        Professional barge-in detection using TALK_DETECT while playing audio
-        Follows Asterisk best practices for fast, accurate interruption detection
+        Professional barge-in detection using BackgroundDetect (FIXED - no AGI blocking)
+        BackgroundDetect runs detection internally and returns immediately when speech detected
         """
-        logger.info(f"Starting TALK_DETECT barge-in detection for: {audio_file}")
+        if '.' in audio_file:
+            audio_file = audio_file.rsplit('.', 1)[0]
+
+        logger.info(f"Starting BackgroundDetect barge-in for: {audio_file}")
 
         try:
-            # Enable TALK_DETECT on caller's channel (200ms threshold)
-            talk_detect_cmd = 'SET VARIABLE TALK_DETECT(200) 1'
-            result = self.agi.command(talk_detect_cmd)
+            # Use BackgroundDetect with professional parameters:
+            # silence_ms: 800ms silence after speech to confirm end
+            # min_ms: 200ms minimum speech duration to detect barge-in
+            # max_ms: 7000ms maximum continuous speech before auto-cutoff
+            detect_cmd = f'EXEC BackgroundDetect {audio_file},800,200,7000'
 
-            if not result or not result.startswith('200'):
-                logger.error(f"Failed to enable TALK_DETECT: {result}")
-                return False, None
+            logger.info(f"Running BackgroundDetect: {detect_cmd}")
+            result = self.agi.command(detect_cmd)
 
-            logger.info(f"TALK_DETECT enabled, playing audio: {audio_file}")
+            logger.info(f"BackgroundDetect result: {result}")
 
-            # Start background playback (non-blocking)
-            playback_cmd = f'EXEC BackGround {audio_file}'
-            result = self.agi.command(playback_cmd)
-
-            if not result or not result.startswith('200'):
-                logger.error(f"Failed to start BackGround playback: {result}")
-                return False, None
-
-            # Poll for voice activity during playback
-            start_time = time.time()
-            while time.time() - start_time < timeout:
-                if not self.agi.connected:
-                    logger.info("Call disconnected during barge-in detection")
-                    break
-
-                # Check TALK_DETECT status
-                talk_status_cmd = 'GET VARIABLE CHANNEL(talking)'
-                result = self.agi.command(talk_status_cmd)
-
-                if result and '200 result=1' in result:
-                    # Voice detected! Stop playback immediately
-                    logger.info("TALK_DETECT: Voice activity detected, stopping playback")
-
-                    stop_cmd = 'EXEC StopPlayback'
-                    self.agi.command(stop_cmd)
-
-                    # Disable TALK_DETECT
-                    disable_cmd = 'SET VARIABLE TALK_DETECT() ""'
-                    self.agi.command(disable_cmd)
-
+            # Parse BackgroundDetect result
+            if result and result.startswith('200'):
+                if "result=0" in result:
+                    # Playback completed without interruption
+                    logger.info("BackgroundDetect: Playback completed without interruption")
+                    return False, None
+                else:
+                    # Voice activity detected during playback - BackgroundDetect stopped
+                    logger.info("BackgroundDetect: Voice detected - playback interrupted")
                     return True, "INTERRUPTED"
-
-                time.sleep(0.1)  # Poll every 100ms for responsive detection
-
-            # Timeout reached - no interruption detected
-            logger.info("TALK_DETECT: No interruption detected, playback completed")
-
-            # Disable TALK_DETECT
-            disable_cmd = 'SET VARIABLE TALK_DETECT() ""'
-            self.agi.command(disable_cmd)
-
-            return False, None
+            else:
+                # BackgroundDetect failed - fallback to simple playback
+                logger.warning(f"BackgroundDetect failed: {result}, using fallback")
+                fallback_result = self.agi.command(f'STREAM FILE {audio_file} ""')
+                if fallback_result and fallback_result.startswith('200'):
+                    logger.info("Fallback playback completed")
+                    return False, None
+                else:
+                    logger.error(f"Fallback playback failed: {fallback_result}")
+                    return False, None
 
         except Exception as e:
-            logger.error(f"TALK_DETECT barge-in error: {e}")
+            logger.error(f"BackgroundDetect barge-in error: {e}")
             # Ensure cleanup
             try:
                 self.agi.command('EXEC StopPlayback')
-                disable_cmd = 'SET VARIABLE TALK_DETECT() ""'
-                self.agi.command(disable_cmd)
             except:
                 pass
             return False, None
@@ -260,8 +252,16 @@ class ProductionCallRecorder:
         Play audio with professional barge-in capability
         Returns True if interrupted, False if completed normally
         """
-        interrupted, status = self.detect_barge_in_with_talk_detect(audio_file, timeout)
+        interrupted, status = self.detect_barge_in_with_background_detect(audio_file, timeout)
         return interrupted
+
+    def detect_barge_in_with_talk_detect(self, audio_file, timeout=3):
+        """
+        DEPRECATED: Use detect_barge_in_with_background_detect() instead
+        The TALK_DETECT polling approach has AGI blocking issues
+        """
+        logger.warning("detect_barge_in_with_talk_detect is deprecated - use detect_barge_in_with_background_detect")
+        return self.detect_barge_in_with_background_detect(audio_file, timeout)
 
     def record_with_voice_interrupt(self, filename, timeout=3):
         """
