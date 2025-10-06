@@ -162,13 +162,21 @@ class ModelWarmupService:
             return False
 
     def _handle_client_request(self, client_socket):
-        """Handle individual client request"""
+        """Handle individual client request (FIXED: no truncation)"""
         try:
-            # Receive request
-            data = client_socket.recv(4096).decode('utf-8')
-            if not data:
+            # Receive request in chunks until EOF (FIXED: prevents truncation)
+            request_chunks = []
+            while True:
+                chunk = client_socket.recv(8192)
+                if not chunk:
+                    break
+                request_chunks.append(chunk)
+
+            if not request_chunks:
                 return
 
+            # Decode full request
+            data = b''.join(request_chunks).decode('utf-8')
             request = json.loads(data)
             action = request.get('action')
 
@@ -211,15 +219,17 @@ class ModelWarmupService:
             elif action == 'health':
                 response = {'status': 'success', 'models_loaded': self.models_loaded}
 
-            # Send response
+            # Send response and close write side (FIXED: signals end of response)
             response_json = json.dumps(response)
             client_socket.send(response_json.encode('utf-8'))
+            client_socket.shutdown(socket.SHUT_WR)
 
         except Exception as e:
             logger.error(f"Client request handling failed: {e}")
             try:
                 error_response = json.dumps({'status': 'error', 'message': str(e)})
                 client_socket.send(error_response.encode('utf-8'))
+                client_socket.shutdown(socket.SHUT_WR)
             except:
                 pass
         finally:
