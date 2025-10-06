@@ -22,7 +22,7 @@ class SocketClient:
         logger.info(f"Socket client initialized - connecting to {self.socket_path}")
 
     def _send_request(self, request_data):
-        """Send request to socket server and get response"""
+        """Send request to socket server and get response (FIXED: no truncation)"""
         try:
             # Create socket connection
             client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -32,12 +32,26 @@ class SocketClient:
             request_json = json.dumps(request_data)
             client_socket.send(request_json.encode('utf-8'))
 
-            # Receive response
-            response_data = client_socket.recv(4096).decode('utf-8')
+            # Shutdown write side to signal end of request
+            client_socket.shutdown(socket.SHUT_WR)
+
+            # Receive response in chunks until EOF (FIXED: prevents truncation)
+            response_chunks = []
+            while True:
+                chunk = client_socket.recv(8192)
+                if not chunk:
+                    break
+                response_chunks.append(chunk)
+
             client_socket.close()
 
-            response = json.loads(response_data)
-            return response
+            # Decode full response
+            if response_chunks:
+                response_data = b''.join(response_chunks).decode('utf-8')
+                response = json.loads(response_data)
+                return response
+            else:
+                return {'status': 'error', 'message': 'Empty response from server'}
 
         except FileNotFoundError:
             logger.error(f"Socket not found: {self.socket_path}")
