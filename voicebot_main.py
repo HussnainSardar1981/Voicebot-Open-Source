@@ -147,36 +147,13 @@ def handle_greeting(agi, tts, asr, ollama, recorder: ProductionCallRecorder):
     logger.info("Playing greeting (instant via persistent TTS)...")
     greeting_text = "Hello, thank you for calling NET-OH-VOH. I'm Alexis. How can I help you?"
 
-    # Barge-in aware chunked playback
+    # TEMP: Disable greeting barge-in to verify playback path
     greeting_transcript = None
-    th, stop_ev, intr_res = recorder.start_interrupt_monitor(window_sec=6, min_bytes=16384, arm_delay_ms=1200)
-
-    spoken_so_far = []
-    def _check_stop():
-        if bool(intr_res.activated and intr_res.transcript):
-            joined = " ".join(spoken_so_far)
-            return not _is_false_barge(intr_res.transcript, joined)
-        return False
-
-    def _on_chunk_played(ch):
-        spoken_so_far.append(ch)
-
     status = play_chunks_with_interrupt(
-        agi, tts, greeting_text, voice_type="greeting", check_stop=_check_stop, on_chunk_played=_on_chunk_played
+        agi, tts, greeting_text, voice_type="greeting", check_stop=lambda: False
     )
 
-    stop_ev.set()
-    th.join(timeout=0.2)
-
-    if intr_res.activated and intr_res.transcript:
-        spoken_now = greeting_text
-        if _is_false_barge(intr_res.transcript, spoken_now):
-            logger.info("Interrupt looked like our own TTS; ignoring and continuing.")
-        else:
-            logger.info(f"Greeting interrupted by voice: {intr_res.transcript[:30]}...")
-            greeting_transcript = intr_res.transcript
-    else:
-        logger.info(f"Greeting playback status: {status}")
+    logger.info(f"Greeting playback status: {status}")
 
     # Process greeting interruption immediately
     if greeting_transcript:
