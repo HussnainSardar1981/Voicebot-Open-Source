@@ -81,14 +81,15 @@ class ProductionCallRecorder:
         """
         unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:4]}"
         record_file = f"/var/spool/asterisk/monitor/mix_{unique_id}"
-        wav_file = f"{record_file}.wav"
+        wav_file = f"{record_file}.wav"              # mixed (both directions)
+        rx_wav_file = f"{record_file}_rx.wav"        # inbound (caller -> bot)
 
         logger.info(f"Starting MixMonitor recording: {record_file}")
 
         try:
-            # Start MixMonitor - records call audio stream (both directions)
-            # Records both inbound (user speech) and outbound (TTS) audio
-            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav'
+            # Start MixMonitor: also record receive-only stream to a separate file
+            # Using r(file) per Asterisk docs so we can monitor caller-only audio
+            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,r({record_file}_rx.wav)'
             result = self.agi.command(mixmonitor_cmd)
 
             if not result or not result.startswith('200'):
@@ -99,7 +100,8 @@ class ProductionCallRecorder:
 
             # Wait for EOS or timeout
             deadline = time.time() + float(timeout)
-            self._wait_for_end_of_speech(wav_file, deadline_ts=deadline)
+            # Wait on RX-only file to avoid bot TTS growth
+            self._wait_for_end_of_speech(rx_wav_file, deadline_ts=deadline)
 
             # Stop MixMonitor
             stop_result = self.agi.command('EXEC StopMixMonitor')
@@ -108,18 +110,21 @@ class ProductionCallRecorder:
             # Small delay to ensure file is written
             time.sleep(0.2)
 
-            # Check final recording
-            if os.path.exists(wav_file):
-                file_size = os.path.getsize(wav_file)
+            # Check final recording (prefer RX-only)
+            target_final = rx_wav_file if os.path.exists(rx_wav_file) else wav_file
+            if os.path.exists(target_final):
+                file_size = os.path.getsize(target_final)
                 logger.info(f"Final recording: {file_size} bytes")
 
                 if file_size >= self._MIN_SPEECH_BYTES:
                     # Transcribe with ASR
-                    transcript = self.asr.transcribe_file(wav_file)
+                    transcript = self.asr.transcribe_file(target_final)
 
                     # Cleanup
                     try:
                         os.unlink(wav_file)
+                        if os.path.exists(rx_wav_file):
+                            os.unlink(rx_wav_file)
                     except Exception as e:
                         logger.debug(f"Cleanup failed: {e}")
 
@@ -129,6 +134,8 @@ class ProductionCallRecorder:
                     # Cleanup small/empty file
                     try:
                         os.unlink(wav_file)
+                        if os.path.exists(rx_wav_file):
+                            os.unlink(rx_wav_file)
                     except:
                         pass
                     return None
@@ -143,6 +150,8 @@ class ProductionCallRecorder:
                 self.agi.command('EXEC StopMixMonitor')
                 if os.path.exists(wav_file):
                     os.unlink(wav_file)
+                if os.path.exists(rx_wav_file):
+                    os.unlink(rx_wav_file)
             except:
                 pass
             return None
@@ -154,13 +163,14 @@ class ProductionCallRecorder:
         """
         unique_id = f"{int(time.time())}_{uuid.uuid4().hex[:4]}"
         record_file = f"/var/spool/asterisk/monitor/interrupt_{unique_id}"
-        wav_file = f"{record_file}.wav"
+        wav_file = f"{record_file}.wav"           # mixed
+        rx_wav_file = f"{record_file}_rx.wav"     # inbound-only
 
         logger.info(f"Starting interrupt detection: {record_file}")
 
         try:
-            # Start MixMonitor for interrupt detection (both directions)
-            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav'
+            # Start MixMonitor for interrupt detection; also capture RX-only stream
+            mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav,r({record_file}_rx.wav)'
             result = self.agi.command(mixmonitor_cmd)
 
             if not result or not result.startswith('200'):
@@ -173,9 +183,9 @@ class ProductionCallRecorder:
                 if not self.agi.connected:
                     break
 
-                # Check for voice activity
-                if os.path.exists(wav_file):
-                    file_size = os.path.getsize(wav_file)
+                # Check for voice activity on RX-only file
+                if os.path.exists(rx_wav_file):
+                    file_size = os.path.getsize(rx_wav_file)
                     if file_size > 200:  # Voice detected - lower threshold
                         logger.info(f"Voice interrupt detected: {file_size} bytes")
 
@@ -183,13 +193,16 @@ class ProductionCallRecorder:
                         self.agi.command('EXEC StopMixMonitor')
                         time.sleep(0.1)
 
-                        # Transcribe interruption
-                        if os.path.exists(wav_file):
-                            transcript = self.asr.transcribe_file(wav_file)
+                        # Transcribe interruption from RX-only file
+                        if os.path.exists(rx_wav_file):
+                            transcript = self.asr.transcribe_file(rx_wav_file)
 
                             # Cleanup
                             try:
-                                os.unlink(wav_file)
+                                if os.path.exists(wav_file):
+                                    os.unlink(wav_file)
+                                if os.path.exists(rx_wav_file):
+                                    os.unlink(rx_wav_file)
                             except:
                                 pass
 
@@ -207,6 +220,8 @@ class ProductionCallRecorder:
             try:
                 if os.path.exists(wav_file):
                     os.unlink(wav_file)
+                if os.path.exists(rx_wav_file):
+                    os.unlink(rx_wav_file)
             except:
                 pass
 
