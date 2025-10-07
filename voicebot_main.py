@@ -20,7 +20,7 @@ from socket_clients import KokoroSocketClient as KokoroTTSClient
 from socket_clients import WhisperSocketClient as WhisperASRClient
 from socket_clients import OllamaSocketClient as SimpleOllamaClient
 from socket_clients import test_socket_connection
-from agi_interface import SimpleAGI, FastInterruptRecorder, play_chunks_with_interrupt
+from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
 from audio_utils import convert_audio_for_asterisk
 
@@ -28,20 +28,6 @@ from audio_utils import convert_audio_for_asterisk
 setup_project_path()
 setup_logging()
 logger = logging.getLogger(__name__)
-def _is_false_barge(user_snippet: str, spoken_text: str) -> bool:
-    """Return True if the 'interrupt' is just our own TTS picked up by ASR."""
-    if not user_snippet or not spoken_text:
-        return False
-    a = user_snippet.lower().strip()
-    b = spoken_text.lower().strip()
-    if a in b or b in a:
-        return True
-    at = set(a.split())
-    bt = set(b.split())
-    if not at or not bt:
-        return False
-    jacc = len(at & bt) / max(1, len(at | bt))
-    return jacc >= 0.65
 
 # Global pre-loaded instances for instant availability - PERSISTENT MODEL LOADING
 _tts_client = None
@@ -142,18 +128,39 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
 
     return False, None
 
-def handle_greeting(agi, tts, asr, ollama, recorder: ProductionCallRecorder):
+def handle_greeting(agi, tts, asr, ollama):
     """Handle the initial greeting and any interruptions - INSTANT via socket"""
     logger.info("Playing greeting (instant via persistent TTS)...")
     greeting_text = "Hello, thank you for calling NET-OH-VOH. I'm Alexis. How can I help you?"
 
-    # TEMP: Disable greeting barge-in to verify playback path
-    greeting_transcript = None
-    status = play_chunks_with_interrupt(
-        agi, tts, greeting_text, voice_type="greeting", check_stop=lambda: False
-    )
+    # Generate greeting TTS via socket (models already loaded, so fast)
+    tts_file = tts.synthesize(greeting_text, voice_type="greeting")
 
-    logger.info(f"Greeting playback status: {status}")
+    greeting_transcript = None
+    if tts_file and os.path.exists(tts_file):
+        asterisk_file = convert_audio_for_asterisk(tts_file)
+
+        # Cleanup TTS file
+        try:
+            os.unlink(tts_file)
+        except Exception as e:
+            logger.debug(f"TTS file cleanup failed: {e}")
+
+        if asterisk_file:
+            success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
+            if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
+                logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
+                greeting_transcript = interrupt
+            elif interrupt:
+                logger.info("Greeting interrupted by voice")
+            else:
+                logger.info(f"Greeting played: {success}")
+        else:
+            logger.error("Audio conversion failed")
+            agi.stream_file("demo-thanks")
+    else:
+        logger.error("TTS greeting failed")
+        agi.stream_file("demo-thanks")
 
     # Process greeting interruption immediately
     if greeting_transcript:
@@ -161,12 +168,6 @@ def handle_greeting(agi, tts, asr, ollama, recorder: ProductionCallRecorder):
         # Add to conversation context and generate response
         response = ollama.generate(greeting_transcript)
         logger.info(f"Response to interruption: {response[:30]}...")
-        voice_type = determine_voice_type(response)
-        th2, stop_ev2, intr2 = recorder.start_interrupt_monitor(window_sec=6)
-        def _check_stop2():
-            return intr2.activated
-        play_chunks_with_interrupt(agi, tts, response, voice_type=voice_type, check_stop=_check_stop2)
-        stop_ev2.set(); th2.join(timeout=0.2)
     else:
         logger.info("Greeting complete - ready for conversation")
 
@@ -221,51 +222,44 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             transcript, response, no_response_count, failed_interactions, start_time
         )
 
-        # Speak response with barge-in
+        # Speak response
         logger.info(f"Responding: {response[:30]}...")
+
         voice_type = determine_voice_type(response)
+        tts_file = tts.synthesize(response, voice_type=voice_type)
         interrupt_transcript = None
 
-        th, stop_ev, intr_res = recorder.start_interrupt_monitor(window_sec=6)
+        if tts_file and os.path.exists(tts_file):
+            asterisk_file = convert_audio_for_asterisk(tts_file)
 
-        spoken_so_far = []
-        def _check_stop_turn():
-            if bool(intr_res.activated and intr_res.transcript):
-                joined = " ".join(spoken_so_far)
-                return not _is_false_barge(intr_res.transcript, joined)
-            return False
+            try:
+                os.unlink(tts_file)
+            except Exception as e:
+                logger.debug(f"TTS file cleanup failed: {e}")
 
-        def _on_chunk_played_turn(ch):
-            spoken_so_far.append(ch)
-
-        status = play_chunks_with_interrupt(
-            agi, tts, response, voice_type=voice_type, check_stop=_check_stop_turn, on_chunk_played=_on_chunk_played_turn
-        )
-
-        stop_ev.set()
-        th.join(timeout=0.2)
-
-        if intr_res.activated and intr_res.transcript:
-            spoken_now = response
-            if _is_false_barge(intr_res.transcript, spoken_now):
-                logger.info("False barge (ASR caught our TTS). Continuing playback/flow.")
-                interrupt_transcript = None
+            if asterisk_file:
+                success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
+                if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
+                    logger.info(f"Response interrupted by voice: {interrupt[:30]}...")
+                    interrupt_transcript = interrupt
+                elif interrupt:
+                    logger.info("Response interrupted by voice")
+                    # Get user input since we detected voice but no transcript
+                    transcript = recorder.get_user_input_with_mixmonitor(timeout=8)
+                    if transcript:
+                        interrupt_transcript = transcript
             else:
-                logger.info(f"Response interrupted by voice: {intr_res.transcript[:30]}...")
-                interrupt_transcript = intr_res.transcript
+                # Fallback to built-in sound
+                agi.stream_file("demo-thanks")
+        else:
+            # Fallback to built-in sound
+            agi.stream_file("demo-thanks")
 
         # If response was interrupted, process the new input immediately
         if interrupt_transcript:
             logger.info("Processing voice interruption...")
             response = ollama.generate(interrupt_transcript)
-            voice_type = determine_voice_type(response)
-            th2, stop_ev2, intr2 = recorder.start_interrupt_monitor(window_sec=6)
-            def _check_stop2():
-                return intr2.activated
-            play_chunks_with_interrupt(agi, tts, response, voice_type=voice_type, check_stop=_check_stop2)
-            stop_ev2.set(); th2.join(timeout=0.2)
-            # then continue to next turn
-            continue
+            continue  # Go back to play new response
 
         # Check exit conditions after response
         if should_exit:
@@ -303,7 +297,7 @@ def main():
         if tts:
             logger.info("TTS ready - playing instant greeting...")
             agi.verbose("VoiceBot Active - Ready")
-            handle_greeting(agi, tts, asr, ollama, recorder=ProductionCallRecorder(agi, asr))
+            handle_greeting(agi, tts, asr, ollama)
         else:
             logger.error("TTS not available - fallback greeting")
             agi.stream_file("demo-thanks")
