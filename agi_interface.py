@@ -9,6 +9,7 @@ import os
 import time
 import uuid
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,13 @@ class SimpleAGI:
         self.connected = True
         self.call_answered = False
         self._parse_env()
+
+    def _start_mixmonitor(self, rec_basename):
+        # rec_basename without extension; Asterisk will add .wav
+        return self.command(f'EXEC MixMonitor {rec_basename}.wav')
+
+    def _stop_mixmonitor(self):
+        return self.command('EXEC StopMixMonitor')
 
     def _parse_env(self):
         """Parse AGI environment"""
@@ -123,6 +131,54 @@ class SimpleAGI:
         else:
             logger.warning(f"Playback had issues: {result}")
             return False, None
+        
+    def play_response_with_barge_in(self, chunk_filenames, vad_window_ms=250):
+        """
+        Plays short audio chunks (filenames may include .wav/.sln16 or bare name).
+        Between chunks, quickly checks MixMonitor file growth (~vad_window_ms).
+        If caller speech is detected, stops further playback and returns.
+        Returns (played_all, detected_speech).
+        """
+        rec_id = f"mm_{int(time.time())}_{uuid.uuid4().hex[:4]}"
+        rec_base = f"/var/spool/asterisk/monitor/{rec_id}"
+        rec_path = f"{rec_base}.wav"
+        self._start_mixmonitor(rec_base)
+
+        detected_speech = False
+        try:
+            for fname in chunk_filenames:
+                if not self.connected:
+                    break
+
+                # Normalize filename for STREAM FILE (no extension)
+                base = fname
+                if '.' in base:
+                    base = base.rsplit('.', 1)[0]
+
+                # Play one short chunk (no DTMF keys allowed)
+                res = self.command(f'STREAM FILE {base} ""')
+                ok = res and res.startswith('200')
+                if not ok:
+                    logger.warning(f"Chunk playback issue: {res}")
+
+                # Quick VAD window: ~250 ms checking MixMonitor size growth
+                end_by = time.time() + (vad_window_ms / 1000.0)
+                last_size = os.path.getsize(rec_path) if os.path.exists(rec_path) else 0
+                while time.time() < end_by:
+                    time.sleep(0.05)
+                    size = os.path.getsize(rec_path) if os.path.exists(rec_path) else 0
+                    if size > last_size + 1024:  # ~1KB growth ≈ recent caller voice
+                        detected_speech = True
+                        break
+
+                if detected_speech:
+                    break
+
+            played_all = not detected_speech
+            return played_all, detected_speech
+        finally:
+            self._stop_mixmonitor()
+
 
     def record_file(self, filename):
         """Record audio - SIMPLE syntax without beep"""
@@ -138,39 +194,33 @@ class SimpleAGI:
         """Sleep"""
         time.sleep(seconds)
 
+    def play_with_vad_barge_in(self, filename, recorder, asr_client, timeout=8):
+        """
+        Play audio file and allow user to interrupt with speech (barge-in).
+        Uses recorder.record_with_voice_interrupt for VAD-based detection.
+        """
+        if '.' in filename:
+            filename = filename.rsplit('.', 1)[0]
 
-class FastInterruptRecorder:
-    """Simple, fast interrupt-capable recorder"""
+        logger.info(f"Playing with VAD barge-in: {filename}")
 
-    def __init__(self, agi, asr_client):
-        self.agi = agi
-        self.asr = asr_client
+        # Start TTS playback in a thread
+        def play_audio():
+            self.command(f'STREAM FILE {filename} ""')
 
-    def get_user_input_with_interrupt(self, timeout=10):
-        """Get user input with fast interrupt capability"""
-        record_file = f"/var/spool/asterisk/monitor/user_{int(time.time())}_{uuid.uuid4().hex[:4]}"
+        play_thread = threading.Thread(target=play_audio)
+        play_thread.start()
 
-        logger.info("Listening for user input...")
-        # Shorter timeout for faster responsiveness
-        result = self.agi.command(f'RECORD FILE {record_file} wav "#" {timeout * 1000} 0 2')
+        # Listen for interruption
+        interrupted, transcript = recorder.record_with_voice_interrupt(filename, timeout=timeout)
 
-        if not self.agi.connected:
-            return None
+        if interrupted:
+            logger.info("User interrupted TTS playback, attempting to stop playback.")
+            # Attempt to stop playback (may require AGI-specific command or workaround)
+            # For Asterisk, you may need to send a DTMF or use CONTROL STREAM FILE for true stop
+            # Here, we just log and rely on short TTS chunks for now
+            return True, transcript
 
-        wav_file = f"{record_file}.wav"
-        transcript = ""
-
-        if os.path.exists(wav_file):
-            file_size = os.path.getsize(wav_file)
-            logger.info(f"Recording: {file_size} bytes")
-
-            if file_size > 300:  # Lower threshold for better detection
-                transcript = self.asr.transcribe_file(wav_file)
-
-            # Cleanup
-            try:
-                os.unlink(wav_file)
-            except Exception as e:
-                logger.debug(f"Cleanup failed: {e}")
-
-        return transcript.strip() if transcript else None
+        # Wait for playback to finish if not interrupted
+        play_thread.join()
+        return True, None
