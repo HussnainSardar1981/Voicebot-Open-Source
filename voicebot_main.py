@@ -147,7 +147,7 @@ def handle_greeting(agi, tts, asr, ollama):
             logger.debug(f"TTS file cleanup failed: {e}")
 
         if asterisk_file:
-            success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
+            success, interrupt = agi.play_with_vad_barge_in(asterisk_file, recorder, asr)
             if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
                 logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
                 greeting_transcript = interrupt
@@ -238,7 +238,7 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                 logger.debug(f"TTS file cleanup failed: {e}")
 
             if asterisk_file:
-                success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
+                success, interrupt = agi.play_with_vad_barge_in(asterisk_file, recorder, asr)
                 if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
                     logger.info(f"Response interrupted by voice: {interrupt[:30]}...")
                     interrupt_transcript = interrupt
