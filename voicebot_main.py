@@ -131,7 +131,7 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
 def handle_greeting(agi, tts, asr, ollama):
     """Handle the initial greeting and any interruptions - INSTANT via socket"""
     logger.info("Playing greeting (instant via persistent TTS)...")
-    greeting_text = "Hello, thank you for calling NET-OH-VOH. I'm Alexis. How can I help you?"
+    greeting_text = "Hello, thank you for calling Netovo. I'm Alexis. How can I help you?"
 
     # Generate greeting TTS via socket (models already loaded, so fast)
     tts_file = tts.synthesize(greeting_text, voice_type="greeting")
@@ -197,7 +197,7 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
 
             # Check for USER exit intents (not AI responses)
             if any(phrase in transcript.lower() for phrase in EXIT_PHRASES):
-                response = "Thank you for calling NETOVO. Have a great day!"
+                response = "Thank you for calling Netovo. Have a great day!"
                 # This will trigger exit after response
             elif any(phrase in transcript.lower() for phrase in URGENT_PHRASES):
                 response = "I understand this is urgent. Let me transfer you to our priority support team immediately."
@@ -211,7 +211,7 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
 
             # Handle no response scenarios
             if no_response_count >= 2:
-                response = "I haven't heard from you in our conversation. I'll end this call now. Thank you for calling NETOVO."
+                response = "I haven't heard from you in our conversation. I'll end this call now. Thank you for calling Netovo."
             elif failed_interactions >= 3:
                 response = "I'm having trouble hearing you clearly. Let me transfer you to a human agent who can better assist you."
             else:
