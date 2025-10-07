@@ -22,7 +22,7 @@ from socket_clients import OllamaSocketClient as SimpleOllamaClient
 from socket_clients import test_socket_connection
 from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
-from audio_utils import convert_audio_for_asterisk, split_wav_into_chunks
+from audio_utils import convert_audio_for_asterisk
 
 # Set up configuration
 setup_project_path()
@@ -128,7 +128,7 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
 
     return False, None
 
-def handle_greeting(agi, tts, asr, ollama, recorder):
+def handle_greeting(agi, tts, asr, ollama):
     """Handle the initial greeting and any interruptions - INSTANT via socket"""
     logger.info("Playing greeting (instant via persistent TTS)...")
     greeting_text = "Hello, thank you for calling Netovo. I'm Alexis. How can I help you?"
@@ -147,12 +147,7 @@ def handle_greeting(agi, tts, asr, ollama, recorder):
             logger.debug(f"TTS file cleanup failed: {e}")
 
         if asterisk_file:
-            chunk_files = split_wav_into_chunks(asterisk_file, chunk_duration_sec=0.7)
-            success, interrupt = agi.play_with_chunked_barge_in(chunk_files, recorder, asr)
-            # Clean up chunk files
-            for f in chunk_files:
-                try: os.unlink(f)
-                except: pass
+            success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
             if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
                 logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
                 greeting_transcript = interrupt
@@ -243,11 +238,7 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                 logger.debug(f"TTS file cleanup failed: {e}")
 
             if asterisk_file:
-                chunk_files = split_wav_into_chunks(asterisk_file, chunk_duration_sec=0.7)
-                success, interrupt = agi.play_with_chunked_barge_in(chunk_files, recorder, asr)
-                for f in chunk_files:
-                    try: os.unlink(f)
-                    except: pass
+                success, interrupt = agi.play_with_voice_interrupt(asterisk_file, asr)
                 if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
                     logger.info(f"Response interrupted by voice: {interrupt[:30]}...")
                     interrupt_transcript = interrupt
@@ -302,17 +293,17 @@ def main():
         # Get TTS first for immediate greeting
         tts, asr, ollama = get_preloaded_clients()
 
-        # Initialize production-grade recorder (MixMonitor-based)
-        recorder = ProductionCallRecorder(agi, asr)
-
         # Play greeting IMMEDIATELY after TTS loads (don't wait for ASR)
         if tts:
             logger.info("TTS ready - playing instant greeting...")
             agi.verbose("VoiceBot Active - Ready")
-            handle_greeting(agi, tts, asr, ollama, recorder)  # <-- pass recorder
+            handle_greeting(agi, tts, asr, ollama)
         else:
             logger.error("TTS not available - fallback greeting")
             agi.stream_file("demo-thanks")
+
+        # Initialize production-grade recorder (MixMonitor-based)
+        recorder = ProductionCallRecorder(agi, asr)
 
         # Main conversation loop
         conversation_loop(agi, tts, asr, ollama, recorder)
