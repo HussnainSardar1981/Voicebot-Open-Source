@@ -8,7 +8,6 @@ import os
 import time
 import uuid
 import logging
-import webrtcvad
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +17,6 @@ class ProductionCallRecorder:
     def __init__(self, agi, asr_client):
         self.agi = agi
         self.asr = asr_client
-        self.vad = webrtcvad.Vad(3)  # Aggressive mode for best speech detection
 
     def get_user_input_with_mixmonitor(self, timeout=10):
         """
@@ -33,6 +31,7 @@ class ProductionCallRecorder:
 
         try:
             # Start MixMonitor - records call audio stream (both directions)
+            # Records both inbound (user speech) and outbound (TTS) audio
             mixmonitor_cmd = f'EXEC MixMonitor {record_file}.wav'
             result = self.agi.command(mixmonitor_cmd)
 
@@ -42,14 +41,15 @@ class ProductionCallRecorder:
 
             logger.info(f"MixMonitor started, waiting {timeout}s for user input...")
 
-            max_utterance_sec = 30.0
-            eos_silence_ms = 1800
-            poll_ms = 30  # 30ms frames for VAD
-            frame_bytes = 480  # 30ms at 16kHz, 16-bit mono
+            # Wait for user to speak (end-of-speech with silence window + max cap)
+            max_utterance_sec = 30.0        # hard cap on a single user turn
+            eos_silence_ms = 1200           # end-of-speech window (~1.2s)
+            poll_ms = 100                   # check 10x per second
+            growth_min_bytes = 512          # treat as “voice activity” if file grows by this
 
             record_start = time.time()
-            last_speech_time = record_start
-            file_pos = 0
+            last_growth_t = record_start
+            last_size = 0
 
             while True:
                 if not self.agi.connected:
@@ -57,24 +57,22 @@ class ProductionCallRecorder:
                     break
 
                 now = time.time()
-                if now - record_start > max_utterance_sec:
+                elapsed = now - record_start
+                if elapsed > max_utterance_sec:
                     logger.info("Max utterance cap reached")
                     break
 
                 if os.path.exists(wav_file):
-                    with open(wav_file, 'rb') as f:
-                        f.seek(file_pos)
-                        chunk = f.read(frame_bytes)
-                        while len(chunk) == frame_bytes:
-                            if self.vad.is_speech(chunk, 16000):
-                                last_speech_time = now
-                            file_pos += frame_bytes
-                            chunk = f.read(frame_bytes)
+                    size = os.path.getsize(wav_file)
+                    if size > last_size + growth_min_bytes:
+                        last_growth_t = now     # speech happening (or resumed)
+                        last_size = size
 
-                # End if enough silence since last speech
-                if (now - last_speech_time) * 1000.0 >= eos_silence_ms:
-                    logger.info("EOS silence reached; stopping recording")
-                    break
+                # end-of-speech: enough silence since last growth
+                if (now - last_growth_t) * 1000.0 >= eos_silence_ms:
+                    if last_size >= 1000:      # only stop if we actually got speech
+                        logger.info("EOS silence reached; stopping recording")
+                        break
 
                 time.sleep(poll_ms / 1000.0)
 
@@ -146,35 +144,56 @@ class ProductionCallRecorder:
 
             # Wait for timeout or voice detection
             start_time = time.time()
-            frame_bytes = 480  # 30ms at 16kHz, 16-bit mono
-
             while time.time() - start_time < timeout:
                 if not self.agi.connected:
                     break
 
+                # Check for voice activity
                 if os.path.exists(wav_file):
-                    with open(wav_file, 'rb') as f:
-                        f.seek(-frame_bytes, 2)
-                        frame = f.read(frame_bytes)
-                        if len(frame) == frame_bytes:
-                            if self.vad.is_speech(frame, 16000):
-                                logger.info("Voice interrupt detected")
-                                self.agi.command('EXEC StopMixMonitor')
-                                time.sleep(0.1)
-                                transcript = self.asr.transcribe_file(wav_file)
+                    file_size = os.path.getsize(wav_file)
+                    if file_size > 200:  # Voice detected - lower threshold
+                        logger.info(f"Voice interrupt detected: {file_size} bytes")
+
+                        # Stop recording
+                        self.agi.command('EXEC StopMixMonitor')
+                        time.sleep(0.1)
+
+                        # Transcribe interruption
+                        if os.path.exists(wav_file):
+                            transcript = self.asr.transcribe_file(wav_file)
+
+                            # Cleanup
+                            try:
                                 os.unlink(wav_file)
-                                return True, transcript.strip() if transcript else "VOICE_DETECTED"
+                            except:
+                                pass
 
-                time.sleep(0.1)
+                            if transcript and len(transcript.strip()) > 1:
+                                return True, transcript.strip()
+                            else:
+                                return True, "VOICE_DETECTED"
 
+                time.sleep(0.1)  # Check every 100ms for fast response
+
+            # No interruption detected
             self.agi.command('EXEC StopMixMonitor')
-            if os.path.exists(wav_file):
-                os.unlink(wav_file)
+
+            # Cleanup
+            try:
+                if os.path.exists(wav_file):
+                    os.unlink(wav_file)
+            except:
+                pass
+
             return False, None
 
         except Exception as e:
             logger.error(f"Interrupt recording error: {e}")
-            self.agi.command('EXEC StopMixMonitor')
-            if os.path.exists(wav_file):
-                os.unlink(wav_file)
+            # Cleanup
+            try:
+                self.agi.command('EXEC StopMixMonitor')
+                if os.path.exists(wav_file):
+                    os.unlink(wav_file)
+            except:
+                pass
             return False, None
