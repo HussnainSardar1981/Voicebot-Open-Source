@@ -51,18 +51,32 @@ CONVERSATION_CONFIG = {
     "interrupt_detection_threshold": 200
 }
 
-# Ollama settings
-OLLAMA_CONFIG = {
-    "model": "orca2:7b",
-    "max_tokens": 50,
-    "temperature": 0.4,
-    "top_p": 0.9,
-    "repeat_penalty": 1.1,
-    "url": "http://localhost:11434/api/generate",
-    "timeout": 15.0,
-    "max_history": 10,
-    "keep_history": 8
+# config.py
+
+MODEL_SETTINGS = {
+    "orca": {
+        "model": "orca2:7b",
+        "temperature": 0.4,
+        "top_p": 0.9,
+        "repeat_penalty": 1.1,
+        "stop": ["\nHuman:", "\nUser:", "Human:", "User:"]
+    },
+    "phi4": {
+        "model": "phi4",
+        "temperature": 0.3,
+        "top_p": 0.85,
+        "repeat_penalty": 1.05,
+        "stop": ["\nHuman:", "\nUser:", "Human:", "User:"]
+    },
+    "llama": {
+        "model": "llama3.1:8b",
+        "temperature": 0.35,
+        "top_p": 0.88,
+        "repeat_penalty": 1.1,
+        "stop": ["\nHuman:", "\nUser:", "Human:", "User:"]
+    }
 }
+
 
 # File paths
 PATHS = {
