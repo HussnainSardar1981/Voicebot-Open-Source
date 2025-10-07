@@ -82,49 +82,46 @@ class KokoroTTSClient:
         return speed_map.get(voice_type, 0.92)
 
     def _enhance_text_for_speech(self, text, voice_type="default"):
-        """Enhance text for more natural speech with pronunciation fixes"""
-        # Escape any problematic characters
+        """Enhance text for more natural speech with pronunciation fixes (safe & minimal)"""
+        # Escape any problematic characters (keeps punctuation intact)
         safe_text = html.escape(text, quote=False)
 
-        # Professional pronunciation corrections
+        # --- Acronym spell-outs (unchanged) ---
         pronunciation_fixes = {
-            "NETOVO": "NET-OH-VOH",           # Clear pronunciation for company name
-            "Netovo": "Net-oh-voh",           # Alternative casing
-            "netovo": "net-oh-voh",           # Lowercase version
-            "AGI": "A-G-I",                   # Spell out acronyms
-            "API": "A-P-I",                   # Spell out acronyms
-            "VoIP": "Voice over I-P",         # Expand technical terms
-            "SIP": "S-I-P",                   # Spell out protocols
+            "AGI": "A-G-I",
+            "API": "A-P-I",
+            "VoIP": "Voice over I-P",
+            "SIP": "S-I-P",
         }
-
-        # Apply pronunciation fixes
         for original, phonetic in pronunciation_fixes.items():
             safe_text = safe_text.replace(original, phonetic)
 
-        # Basic text normalization for better TTS
+        # --- Company name: Netovo (natural, not letter-by-letter) ---
+        # Works in sentences and before punctuation (.,!?)
+        for v in ("NETOVO", "Netovo", "netovo"):
+            safe_text = safe_text.replace(v, "Neh-TOH-voh")
+
+        # Basic text normalization
         safe_text = safe_text.replace("&", " and ")
         safe_text = safe_text.replace("%", " percent ")
         safe_text = safe_text.replace("@", " at ")
         safe_text = safe_text.replace("#", " number ")
 
-        # Improve number pronunciation
+        # Common tech pronunciations
         safe_text = safe_text.replace("24/7", "twenty-four seven")
-        safe_text = safe_text.replace("3CX", "three-C-X")
+        safe_text = safe_text.replace("3CX", "three C X")
 
-        # Add natural pauses for empathetic responses
+        # Light, optional pausing based on voice type (kept minimal to avoid regressions)
         if voice_type == "empathetic":
-            # Add slight pauses after empathetic words
-            empathetic_words = ["sorry", "understand", "apologize", "help"]
-            for word in empathetic_words:
-                if word in safe_text.lower():
-                    safe_text = safe_text.replace(word, f"{word},")
+            for w in ("sorry", "understand", "apologize", "help"):
+                # add a gentle comma after the word if present
+                safe_text = safe_text.replace(f" {w} ", f" {w}, ")
 
-        # Add professional pauses for greetings
-        elif voice_type == "greeting":
-            safe_text = safe_text.replace(". I'm", ". I'm")  # Natural pause
-            safe_text = safe_text.replace("NETOVO.", "NET-OH-VOH.")
+        # NOTE: we do NOT force any special handling like "NETOVO." → "…"
+        # to avoid re-introducing the letter-by-letter spelling.
 
         return safe_text
+
 
     def synthesize(self, text, voice_type="default", voice_override=None):
         """
