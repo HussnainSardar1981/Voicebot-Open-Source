@@ -22,7 +22,7 @@ from socket_clients import OllamaSocketClient as SimpleOllamaClient
 from socket_clients import test_socket_connection
 from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
-from audio_utils import convert_audio_for_asterisk
+from audio_utils import convert_audio_for_asterisk, split_wav_into_chunks
 
 # Set up configuration
 setup_project_path()
@@ -147,7 +147,12 @@ def handle_greeting(agi, tts, asr, ollama, recorder):
             logger.debug(f"TTS file cleanup failed: {e}")
 
         if asterisk_file:
-            success, interrupt = agi.play_with_vad_barge_in(asterisk_file, recorder, asr)
+            chunk_files = split_wav_into_chunks(asterisk_file, chunk_duration_sec=0.7)
+            success, interrupt = agi.play_with_chunked_barge_in(chunk_files, recorder, asr)
+            # Clean up chunk files
+            for f in chunk_files:
+                try: os.unlink(f)
+                except: pass
             if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
                 logger.info(f"Greeting interrupted by voice: {interrupt[:30]}...")
                 greeting_transcript = interrupt
@@ -238,7 +243,11 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                 logger.debug(f"TTS file cleanup failed: {e}")
 
             if asterisk_file:
-                success, interrupt = agi.play_with_vad_barge_in(asterisk_file, recorder, asr)
+                chunk_files = split_wav_into_chunks(asterisk_file, chunk_duration_sec=0.7)
+                success, interrupt = agi.play_with_chunked_barge_in(chunk_files, recorder, asr)
+                for f in chunk_files:
+                    try: os.unlink(f)
+                    except: pass
                 if interrupt and isinstance(interrupt, str) and len(interrupt) > 2:
                     logger.info(f"Response interrupted by voice: {interrupt[:30]}...")
                     interrupt_transcript = interrupt
