@@ -9,7 +9,6 @@ import os
 import time
 import uuid
 import logging
-import re
 
 logger = logging.getLogger(__name__)
 
@@ -106,43 +105,6 @@ class SimpleAGI:
         logger.info(f"Stream file result: {result} (success: {success})")
         return success
 
-    # --- Helper to stream an arbitrary WAV that already lives in Asterisk sounds ---
-    def stream_external_wav(self, abs_wav_path: str):
-        """Play an arbitrary WAV file by converting/copying to sounds and streaming."""
-        try:
-            if not abs_wav_path:
-                return False
-            if not os.path.exists(abs_wav_path):
-                logger.error(f"External WAV missing: {abs_wav_path}")
-                return False
-            # If caller passed a bare filename created by converter, just stream it
-            if abs_wav_path.startswith("/usr/share/asterisk/sounds/"):
-                base = abs_wav_path[len("/usr/share/asterisk/sounds/"):]
-                if base.endswith('.wav'):
-                    base = base[:-4]
-                return self.stream_file(base)
-
-            # Otherwise, copy to sounds tmp with unique name
-            unique = f"ext_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-            dst = f"/usr/share/asterisk/sounds/{unique}.wav"
-            try:
-                import shutil
-                shutil.copyfile(abs_wav_path, dst)
-            except Exception as e:
-                logger.error(f"Copy external wav failed: {e}")
-                return False
-            ok = self.stream_file(unique)
-            # Cleanup temp copy to avoid disk bloat
-            try:
-                if os.path.exists(dst):
-                    os.unlink(dst)
-            except Exception as e:
-                logger.debug(f"Temp WAV cleanup skipped: {e}")
-            return ok
-        except Exception as e:
-            logger.error(f"stream_external_wav error: {e}")
-            return False
-
     def play_with_voice_interrupt(self, filename, asr_client):
         """Play audio with simple barge-in detection - no hangup issues"""
         if '.' in filename:
@@ -212,44 +174,3 @@ class FastInterruptRecorder:
                 logger.debug(f"Cleanup failed: {e}")
 
         return transcript.strip() if transcript else None
-
-
-# --- Chunked TTS playback with interrupt checks between chunks ---
-SENTENCE_SPLIT = re.compile(r'([.!?]+)\s+')
-
-def _chunk_text_for_tts(text: str, max_chars: int = 140):
-    parts, cur = [], ""
-    # Simple whitespace-based splitting with soft sentence handling
-    tokens = text.split()
-    for word in tokens:
-        if len(cur) + (1 if cur else 0) + len(word) > max_chars:
-            if cur:
-                parts.append(cur)
-            cur = word
-        else:
-            cur = (cur + (" " if cur else "") + word)
-    if cur:
-        parts.append(cur)
-    return [p.strip() for p in parts if p.strip()]
-
-def play_chunks_with_interrupt(agi: SimpleAGI, tts_client, text: str, voice_type: str = "default",
-                               check_stop=lambda: False, on_chunk_played=None):
-    """Synthesize small chunks and play them one-by-one.
-    Between chunks, check stop flag; if set, abort immediately.
-    tts_client.synthesize should return a WAV path compatible with stream_external_wav.
-    """
-    chunks = _chunk_text_for_tts(text)
-    for ch in chunks:
-        if check_stop():
-            return "INTERRUPTED"
-        wav_file = tts_client.synthesize(ch, voice_type=voice_type)
-        if not wav_file:
-            continue
-        agi.stream_external_wav(wav_file)
-        if on_chunk_played is not None:
-            try:
-                on_chunk_played(ch)
-            except Exception:
-                pass
-        time.sleep(0.02)
-    return "OK"
