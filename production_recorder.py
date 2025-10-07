@@ -10,6 +10,7 @@ import uuid
 import logging
 import threading
 from dataclasses import dataclass
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,28 @@ class ProductionCallRecorder:
     _EOS_IDLE_MS = 800       # no growth for this long => end-of-speech
     _EOS_POLL_MS = 120       # polling interval
     _MIN_SPEECH_BYTES = 4096 # ignore tiny blips/breaths but catch short replies
+
+    def _prepare_asr_input(self, src_wav: str) -> str:
+        """Convert RX WAV to 16kHz mono PCM WAV for Whisper if needed.
+        Returns path to converted file (may be source if conversion fails)."""
+        try:
+            if not os.path.exists(src_wav):
+                return src_wav
+            dst = f"/tmp/asr_{uuid.uuid4().hex[:8]}.wav"
+            cmd = [
+                'sox', src_wav,
+                '-r', '16000',
+                '-c', '1',
+                '-b', '16',
+                '-e', 'signed-integer',
+                dst
+            ]
+            subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if os.path.exists(dst) and os.path.getsize(dst) > 1000:
+                return dst
+        except Exception:
+            pass
+        return src_wav
 
     @staticmethod
     def _file_size(path: str) -> int:
@@ -127,7 +150,13 @@ class ProductionCallRecorder:
 
                 if file_size >= self._MIN_SPEECH_BYTES:
                     # Transcribe with ASR
-                    transcript = self.asr.transcribe_file(target_final)
+                    asr_input = self._prepare_asr_input(target_final)
+                    transcript = self.asr.transcribe_file(asr_input)
+                    try:
+                        if asr_input != target_final and os.path.exists(asr_input):
+                            os.unlink(asr_input)
+                    except Exception:
+                        pass
 
                     # Cleanup
                     try:
@@ -205,7 +234,13 @@ class ProductionCallRecorder:
 
                         # Transcribe interruption from RX-only file
                         if os.path.exists(rx_wav_file):
-                            transcript = self.asr.transcribe_file(rx_wav_file)
+                            asr_input = self._prepare_asr_input(rx_wav_file)
+                            transcript = self.asr.transcribe_file(asr_input)
+                            try:
+                                if asr_input != rx_wav_file and os.path.exists(asr_input):
+                                    os.unlink(asr_input)
+                            except Exception:
+                                pass
 
                             # Cleanup
                             try:
