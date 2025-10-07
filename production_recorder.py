@@ -41,21 +41,40 @@ class ProductionCallRecorder:
 
             logger.info(f"MixMonitor started, waiting {timeout}s for user input...")
 
-            # Wait for user to speak (or timeout)
-            start_time = time.time()
-            while time.time() - start_time < timeout:
+            # Wait for user to speak (end-of-speech with silence window + max cap)
+            max_utterance_sec = 30.0        # hard cap on a single user turn
+            eos_silence_ms = 1200           # end-of-speech window (~1.2s)
+            poll_ms = 100                   # check 10x per second
+            growth_min_bytes = 512          # treat as “voice activity” if file grows by this
+
+            record_start = time.time()
+            last_growth_t = record_start
+            last_size = 0
+
+            while True:
                 if not self.agi.connected:
                     logger.info("Call disconnected during recording")
                     break
 
-                # Check if file exists and has content
+                now = time.time()
+                elapsed = now - record_start
+                if elapsed > max_utterance_sec:
+                    logger.info("Max utterance cap reached")
+                    break
+
                 if os.path.exists(wav_file):
-                    file_size = os.path.getsize(wav_file)
-                    if file_size > 1000:  # Reasonable audio content detected
-                        logger.info(f"Audio detected: {file_size} bytes")
+                    size = os.path.getsize(wav_file)
+                    if size > last_size + growth_min_bytes:
+                        last_growth_t = now     # speech happening (or resumed)
+                        last_size = size
+
+                # end-of-speech: enough silence since last growth
+                if (now - last_growth_t) * 1000.0 >= eos_silence_ms:
+                    if last_size >= 1000:      # only stop if we actually got speech
+                        logger.info("EOS silence reached; stopping recording")
                         break
 
-                time.sleep(0.5)  # Check every 500ms
+                time.sleep(poll_ms / 1000.0)
 
             # Stop MixMonitor
             stop_result = self.agi.command('EXEC StopMixMonitor')
