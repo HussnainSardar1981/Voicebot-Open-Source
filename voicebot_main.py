@@ -128,7 +128,7 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
 
     return False, None
 
-def handle_greeting(agi, tts, asr, ollama):
+def handle_greeting(agi, tts, asr, ollama, recorder):
     """Handle the initial greeting and any interruptions - INSTANT via socket"""
     logger.info("Playing greeting (instant via persistent TTS)...")
     greeting_text = "Hello, thank you for calling Netovo. I'm Alexis. How can I help you?"
@@ -293,17 +293,17 @@ def main():
         # Get TTS first for immediate greeting
         tts, asr, ollama = get_preloaded_clients()
 
+        # Initialize production-grade recorder (MixMonitor-based)
+        recorder = ProductionCallRecorder(agi, asr)
+
         # Play greeting IMMEDIATELY after TTS loads (don't wait for ASR)
         if tts:
             logger.info("TTS ready - playing instant greeting...")
             agi.verbose("VoiceBot Active - Ready")
-            handle_greeting(agi, tts, asr, ollama)
+            handle_greeting(agi, tts, asr, ollama, recorder)  # <-- pass recorder
         else:
             logger.error("TTS not available - fallback greeting")
             agi.stream_file("demo-thanks")
-
-        # Initialize production-grade recorder (MixMonitor-based)
-        recorder = ProductionCallRecorder(agi, asr)
 
         # Main conversation loop
         conversation_loop(agi, tts, asr, ollama, recorder)
