@@ -24,8 +24,8 @@ from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
 from audio_utils import convert_audio_for_asterisk
 
-# Import the Asterisk-compatible voice interruption system
-from asterisk_voice_interrupt import EnhancedAGI
+# Import the REAL voice interruption system (Asterisk built-in speech recognition)
+from real_voice_interrupt import EnhancedAGI
 
 # Set up configuration
 setup_project_path()
@@ -128,7 +128,7 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
 def handle_greeting_with_interruption(enhanced_agi, tts, asr, ollama):
     """Handle the initial greeting with robust voice interruption"""
     logger.info("Playing greeting with voice interruption enabled...")
-    greeting_text = "Hello, thank you for calling Netovo. I'm Alexis, your AI assistant. You can interrupt me anytime by speaking, or press star to interrupt. How can I help you today?"
+    greeting_text = "Hello, thank you for calling Netovo. I'm Alexis, your AI assistant. You can interrupt me anytime just by speaking naturally. How can I help you today?"
 
     # Generate greeting TTS via socket (models already loaded, so fast)
     tts_file = tts.synthesize(greeting_text, voice_type="greeting")
@@ -302,15 +302,15 @@ def main():
         # Create enhanced AGI with professional voice interruption capabilities
         enhanced_agi = EnhancedAGI(base_agi, asr)
 
-        # Configure Asterisk voice interruption (file-based detection)
-        enhanced_agi.set_voice_detection_sensitivity(2048)  # 2KB growth threshold
-        logger.info("Asterisk voice interruption configured (call audio monitoring)")
+        # Configure REAL voice interruption (Asterisk speech recognition)
+        enhanced_agi.set_voice_detection_sensitivity("normal")  # Voice sensitivity level
+        logger.info("REAL voice interruption configured (Asterisk built-in speech recognition)")
 
         # Start voice monitoring for the entire call
         if not enhanced_agi.start_call_monitoring():
             logger.warning("Voice monitoring failed - falling back to basic mode")
 
-        base_agi.verbose("Enhanced VoiceBot Ready - Voice Interruption Enabled")
+        base_agi.verbose("Enhanced VoiceBot Ready - REAL Voice Interruption Enabled")
 
         # Handle greeting with interruption
         greeting_transcript, greeting_response = handle_greeting_with_interruption(
