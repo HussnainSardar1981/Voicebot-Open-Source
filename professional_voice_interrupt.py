@@ -342,7 +342,7 @@ class EnhancedAGI:
 
     def __getattr__(self, name):
         """Delegate all other methods to base AGI"""
-        return getattr__(self.agi, name)
+        return getattr(self.agi, name)
 
     def play_with_voice_interrupt(self, filename, asr_client=None):
         """
