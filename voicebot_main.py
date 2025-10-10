@@ -24,8 +24,8 @@ from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
 from audio_utils import convert_audio_for_asterisk
 
-# Import the new robust interruption system
-from voice_interrupt import EnhancedAGI
+# Import the professional voice interruption system (WebRTC VAD)
+from professional_voice_interrupt import EnhancedAGI
 
 # Set up configuration
 setup_project_path()
@@ -128,7 +128,7 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
 def handle_greeting_with_interruption(enhanced_agi, tts, asr, ollama):
     """Handle the initial greeting with robust voice interruption"""
     logger.info("Playing greeting with voice interruption enabled...")
-    greeting_text = "Hello, thank you for calling Netovo. I'm Alexis. How can I help you?"
+    greeting_text = "Hello, thank you for calling Netovo. I'm Alexis, your AI assistant. You can interrupt me anytime by speaking. How can I help you today?"
 
     # Generate greeting TTS via socket (models already loaded, so fast)
     tts_file = tts.synthesize(greeting_text, voice_type="greeting")
@@ -299,12 +299,16 @@ def main():
             base_agi.hangup()
             return
 
-        # Create enhanced AGI with voice interruption capabilities
+        # Create enhanced AGI with professional voice interruption capabilities
         enhanced_agi = EnhancedAGI(base_agi, asr)
+
+        # Configure professional voice interruption (WebRTC VAD)
+        enhanced_agi.set_vad_aggressiveness(2)  # Balanced detection (0=sensitive, 3=aggressive)
+        logger.info("Professional voice interruption configured (WebRTC VAD)")
 
         # Start voice monitoring for the entire call
         if not enhanced_agi.start_call_monitoring():
-            logger.warning("Voice monitoring failed - using basic mode")
+            logger.warning("Voice monitoring failed - falling back to basic mode")
 
         base_agi.verbose("Enhanced VoiceBot Ready - Voice Interruption Enabled")
 
