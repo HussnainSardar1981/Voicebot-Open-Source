@@ -7,6 +7,7 @@ GPU-accelerated speech processing for professional customer service
 import os
 import time
 import logging
+import sys
 from datetime import datetime
 
 # Import configuration and utilities
@@ -23,6 +24,16 @@ from socket_clients import test_socket_connection
 from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
 from audio_utils import convert_audio_for_asterisk
+
+# Import ATERA integration for support queries
+try:
+    from atera_voice_integration import ATERAVoiceHandler
+    ATERA_AVAILABLE = True
+    print("✅ ATERA integration loaded successfully")
+except ImportError as e:
+    ATERA_AVAILABLE = False
+    print(f"⚠️ ATERA integration not available: {e}")
+    print("Support queries will be handled by AI instead")
 
 # Set up configuration
 setup_project_path()
@@ -171,8 +182,8 @@ def handle_greeting(agi, tts, asr, ollama):
     else:
         logger.info("Greeting complete - ready for conversation")
 
-def conversation_loop(agi, tts, asr, ollama, recorder):
-    """Main conversation loop"""
+def conversation_loop(agi, tts, asr, ollama, recorder, atera_voice):
+    """Main conversation loop with ATERA support integration"""
     max_turns = CONVERSATION_CONFIG["max_turns"]
     failed_interactions = 0
     no_response_count = 0
@@ -203,8 +214,40 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                 response = "I understand this is urgent. Let me transfer you to our priority support team immediately."
                 # This will trigger exit after response
             else:
-                # Normal AI response
-                response = ollama.generate(transcript)
+                # NEW: Check if this is a support query BEFORE AI processing
+                if atera_voice:
+                    try:
+                        caller_id = agi.env.get('agi_callerid', 'Unknown')
+                        support_response = atera_voice.handle_support_query(
+                            user_input=transcript,
+                            caller_phone=caller_id,
+                            conversation_context={
+                                "conversation_turn": turn,
+                                "user_context": {}
+                            }
+                        )
+
+                        if support_response["is_support_query"]:
+                            # Handle support query with ATERA
+                            logger.info(f"🎫 ATERA handling support query: {transcript[:30]}...")
+                            response = support_response["voice_response"]
+                            logger.info(f"📞 ATERA Response: {response[:50]}...")
+
+                            # Check if escalation needed
+                            if support_response.get("requires_escalation", False):
+                                logger.info("🚨 ATERA escalation required")
+                                response += " Let me transfer you to our support team."
+                        else:
+                            # Non-support query - use existing AI processing
+                            logger.info("🤖 Using AI for non-support query")
+                            response = ollama.generate(transcript)
+                    except Exception as e:
+                        logger.error(f"❌ ATERA error: {e}")
+                        # Fallback to AI if ATERA fails
+                        response = ollama.generate(transcript)
+                else:
+                    # No ATERA available - use AI processing
+                    response = ollama.generate(transcript)
         else:
             failed_interactions += 1
             no_response_count += 1
@@ -293,6 +336,16 @@ def main():
         # Get TTS first for immediate greeting
         tts, asr, ollama = get_preloaded_clients()
 
+        # Initialize ATERA voice handler
+        atera_voice = None
+        if ATERA_AVAILABLE:
+            try:
+                atera_voice = ATERAVoiceHandler()
+                logger.info("✅ ATERA Voice Handler initialized")
+            except Exception as e:
+                logger.error(f"❌ ATERA initialization failed: {e}")
+                atera_voice = None
+
         # Play greeting IMMEDIATELY after TTS loads (don't wait for ASR)
         if tts:
             logger.info("TTS ready - playing instant greeting...")
@@ -306,7 +359,7 @@ def main():
         recorder = ProductionCallRecorder(agi, asr)
 
         # Main conversation loop
-        conversation_loop(agi, tts, asr, ollama, recorder)
+        conversation_loop(agi, tts, asr, ollama, recorder, atera_voice)
 
         # End call
         logger.info("Ending call")
