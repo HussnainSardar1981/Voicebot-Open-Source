@@ -25,15 +25,17 @@ from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
 from audio_utils import convert_audio_for_asterisk
 
-# Import ATERA integration for support queries
+# Import NETOVO Professional Dispatch System
 try:
-    from atera_voice_integration import ATERAVoiceHandler
-    ATERA_AVAILABLE = True
-    print("✅ ATERA integration loaded successfully")
+    sys.path.append('/home/aiadmin/netovo_voicebot/kokoro/Milestone4')
+    from netovo_professional_dispatch import NETOVOProfessionalDispatch
+    from atera_client import ATERAClient
+    NETOVO_DISPATCH_AVAILABLE = True
+    print("✅ NETOVO Professional Dispatch System loaded successfully")
 except ImportError as e:
-    ATERA_AVAILABLE = False
-    print(f"⚠️ ATERA integration not available: {e}")
-    print("Support queries will be handled by AI instead")
+    NETOVO_DISPATCH_AVAILABLE = False
+    print(f"⚠️ NETOVO Dispatch System not available: {e}")
+    print("All calls will be handled by AI instead")
 
 # Set up configuration
 setup_project_path()
@@ -139,10 +141,15 @@ def check_exit_conditions(transcript, response, no_response_count, failed_intera
 
     return False, None
 
-def handle_greeting(agi, tts, asr, ollama):
+def handle_greeting(agi, tts, asr, ollama, netovo_dispatch=None):
     """Handle the initial greeting and any interruptions - INSTANT via socket"""
     logger.info("Playing greeting (instant via persistent TTS)...")
-    greeting_text = "Hello, thank you for calling Netovo. I'm Alexis. How can I help you?"
+
+    # Use professional dispatch greeting if available
+    if netovo_dispatch and NETOVO_DISPATCH_AVAILABLE:
+        greeting_text = "Good afternoon, you've reached Netovo technical support. This is Alexis, your AI dispatch assistant. What technical issue can I help you with today?"
+    else:
+        greeting_text = "Hello, thank you for calling Netovo. I'm Alexis. How can I help you?"
 
     # Generate greeting TTS via socket (models already loaded, so fast)
     tts_file = tts.synthesize(greeting_text, voice_type="greeting")
@@ -182,8 +189,8 @@ def handle_greeting(agi, tts, asr, ollama):
     else:
         logger.info("Greeting complete - ready for conversation")
 
-def conversation_loop(agi, tts, asr, ollama, recorder, atera_voice):
-    """Main conversation loop with ATERA support integration"""
+def conversation_loop(agi, tts, asr, ollama, recorder, netovo_dispatch):
+    """Main conversation loop with NETOVO Professional Dispatch System"""
     max_turns = CONVERSATION_CONFIG["max_turns"]
     failed_interactions = 0
     no_response_count = 0
@@ -214,39 +221,82 @@ def conversation_loop(agi, tts, asr, ollama, recorder, atera_voice):
                 response = "I understand this is urgent. Let me transfer you to our priority support team immediately."
                 # This will trigger exit after response
             else:
-                # NEW: Check if this is a support query BEFORE AI processing
-                if atera_voice:
+                # NEW: NETOVO Professional Dispatch System - First Call Processing
+                if netovo_dispatch and turn == 0:
                     try:
                         caller_id = agi.env.get('agi_callerid', 'Unknown')
-                        support_response = atera_voice.handle_support_query(
-                            user_input=transcript,
+                        logger.info(f"🏢 NETOVO Dispatch: Handling call from {caller_id}")
+
+                        # Initialize professional dispatch for this call
+                        dispatch_response = netovo_dispatch.handle_customer_call(
                             caller_phone=caller_id,
-                            conversation_context={
+                            initial_input=transcript
+                        )
+
+                        if dispatch_response.get("dispatch_active"):
+                            # Professional dispatch is handling this call
+                            logger.info(f"📞 NETOVO Dispatch: {dispatch_response.get('next_action', 'processing')}")
+                            response = dispatch_response["voice_response"]
+
+                            # Set voice type for professional dispatch
+                            voice_type = dispatch_response.get("voice_type", "professional")
+
+                            # Check if call should be transferred immediately
+                            if dispatch_response.get("requires_immediate_transfer"):
+                                logger.info("🚨 NETOVO Dispatch: Immediate transfer required")
+                                response += " Please hold for transfer."
+                                # Transfer logic would go here
+
+                            elif dispatch_response.get("call_completed"):
+                                logger.info("✅ NETOVO Dispatch: Call completed")
+                                # Call is complete, end conversation
+
+                        else:
+                            # Dispatch not active, use AI
+                            logger.info("🤖 Using AI - not a dispatch call")
+                            response = ollama.generate(transcript)
+
+                    except Exception as e:
+                        logger.error(f"❌ NETOVO Dispatch error: {e}")
+                        # Fallback to AI if dispatch fails
+                        response = ollama.generate(transcript)
+
+                # NETOVO Dispatch - Continuing Conversation
+                elif netovo_dispatch and netovo_dispatch.current_customer:
+                    try:
+                        logger.info(f"🔄 NETOVO Dispatch: Continuing conversation - {transcript[:30]}...")
+
+                        # Process customer input through dispatch workflow
+                        dispatch_response = netovo_dispatch.process_customer_input(
+                            user_input=transcript,
+                            context={
                                 "conversation_turn": turn,
-                                "user_context": {}
+                                "caller_id": agi.env.get('agi_callerid', 'Unknown')
                             }
                         )
 
-                        if support_response["is_support_query"]:
-                            # Handle support query with ATERA
-                            logger.info(f"🎫 ATERA handling support query: {transcript[:30]}...")
-                            response = support_response["voice_response"]
-                            logger.info(f"📞 ATERA Response: {response[:50]}...")
+                        response = dispatch_response["voice_response"]
+                        voice_type = dispatch_response.get("voice_type", "professional")
 
-                            # Check if escalation needed
-                            if support_response.get("requires_escalation", False):
-                                logger.info("🚨 ATERA escalation required")
-                                response += " Let me transfer you to our support team."
-                        else:
-                            # Non-support query - use existing AI processing
-                            logger.info("🤖 Using AI for non-support query")
-                            response = ollama.generate(transcript)
+                        # Check for call completion or transfer
+                        if dispatch_response.get("call_completed"):
+                            logger.info("✅ NETOVO Dispatch: Call workflow completed")
+
+                        elif dispatch_response.get("requires_immediate_transfer"):
+                            logger.info("🚨 NETOVO Dispatch: Transfer required")
+                            response += " Please hold while I transfer you."
+
+                        elif dispatch_response.get("requires_escalation"):
+                            logger.info("⬆️ NETOVO Dispatch: Escalation required")
+                            response += " Let me connect you with our technical team."
+
                     except Exception as e:
-                        logger.error(f"❌ ATERA error: {e}")
-                        # Fallback to AI if ATERA fails
+                        logger.error(f"❌ NETOVO Dispatch continuation error: {e}")
                         response = ollama.generate(transcript)
+
                 else:
-                    # No ATERA available - use AI processing
+                    # No dispatch system or general conversation - use AI
+                    logger.info("🤖 Using AI for general conversation")
                     response = ollama.generate(transcript)
         else:
             failed_interactions += 1
@@ -336,21 +386,22 @@ def main():
         # Get TTS first for immediate greeting
         tts, asr, ollama = get_preloaded_clients()
 
-        # Initialize ATERA voice handler
-        atera_voice = None
-        if ATERA_AVAILABLE:
+        # Initialize NETOVO Professional Dispatch System
+        netovo_dispatch = None
+        if NETOVO_DISPATCH_AVAILABLE:
             try:
-                atera_voice = ATERAVoiceHandler()
-                logger.info("✅ ATERA Voice Handler initialized")
+                atera_client = ATERAClient()
+                netovo_dispatch = NETOVOProfessionalDispatch(atera_client)
+                logger.info("✅ NETOVO Professional Dispatch System initialized")
             except Exception as e:
-                logger.error(f"❌ ATERA initialization failed: {e}")
-                atera_voice = None
+                logger.error(f"❌ NETOVO Dispatch initialization failed: {e}")
+                netovo_dispatch = None
 
         # Play greeting IMMEDIATELY after TTS loads (don't wait for ASR)
         if tts:
             logger.info("TTS ready - playing instant greeting...")
             agi.verbose("VoiceBot Active - Ready")
-            handle_greeting(agi, tts, asr, ollama)
+            handle_greeting(agi, tts, asr, ollama, netovo_dispatch)
         else:
             logger.error("TTS not available - fallback greeting")
             agi.stream_file("demo-thanks")
@@ -359,7 +410,7 @@ def main():
         recorder = ProductionCallRecorder(agi, asr)
 
         # Main conversation loop
-        conversation_loop(agi, tts, asr, ollama, recorder, atera_voice)
+        conversation_loop(agi, tts, asr, ollama, recorder, netovo_dispatch)
 
         # End call
         logger.info("Ending call")
