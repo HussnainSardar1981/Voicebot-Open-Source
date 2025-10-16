@@ -1,0 +1,330 @@
+{
+  "name": "NETOVO VoiceBot - Create Atera Ticket",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "create-ticket",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "f7b84b4a-8a15-4c3e-9c1d-2b5e8d7f3a9b",
+      "name": "Webhook - Create Ticket",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "voicebot-create-ticket"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Validate incoming data from voicebot\nconst requiredFields = ['caller_id', 'transcript'];\nconst data = $input.first().json;\n\n// Check required fields\nfor (const field of requiredFields) {\n  if (!data[field] || data[field].trim() === '') {\n    throw new Error(`Missing required field: ${field}`);\n  }\n}\n\n// Clean and validate phone number\nlet phoneNumber = data.caller_id.toString().replace(/[^0-9+]/g, '');\nif (!phoneNumber.startsWith('+')) {\n  phoneNumber = '+1' + phoneNumber.replace(/^1/, '');\n}\n\n// Classify urgency from transcript\nconst transcript = data.transcript.toLowerCase();\nlet urgency = 'normal';\n\nif (transcript.includes('emergency') || transcript.includes('urgent') || transcript.includes('critical')) {\n  urgency = 'urgent';\n} else if (transcript.includes('important') || transcript.includes('asap') || transcript.includes('down')) {\n  urgency = 'high';\n} else if (transcript.includes('slow') || transcript.includes('issue') || transcript.includes('problem')) {\n  urgency = 'normal';\n} else {\n  urgency = 'low';\n}\n\n// Return cleaned data\nreturn {\n  caller_id: phoneNumber,\n  transcript: data.transcript,\n  customer_name: data.customer_name || 'Unknown Customer',\n  urgency: urgency,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "a8c92f5e-7b14-4d2e-9f6a-1c3e5b8d4f7a",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://app.atera.com/api/v3/contacts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "ateraApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "phone",
+              "value": "={{$json.caller_id}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000,
+          "retry": {
+            "enabled": true,
+            "maxRetries": 3
+          }
+        }
+      },
+      "id": "c5a94e8b-2f67-4c8a-9d3e-7b1f5a8c6e9d",
+      "name": "Lookup Customer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.items}}",
+              "rightValue": "",
+              "operator": {
+                "type": "array",
+                "operation": "notEmpty",
+                "rightType": "any"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d8e73b2a-5c49-4f6e-8a7d-3e9f1b5c8a2d",
+      "name": "Customer Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Extract customer information if found\nconst lookupResult = $input.first().json;\nconst originalData = $('Validate Input').first().json;\n\nif (lookupResult.items && lookupResult.items.length > 0) {\n  const customer = lookupResult.items[0];\n  \n  return {\n    ...originalData,\n    customer_id: customer.CustomerID,\n    contact_id: customer.ContactID,\n    customer_name: customer.CustomerName || customer.FirstName + ' ' + customer.LastName,\n    found_customer: true\n  };\n} else {\n  // Customer not found - use default\n  return {\n    ...originalData,\n    customer_id: null,\n    contact_id: null,\n    found_customer: false\n  };\n}"
+      },
+      "id": "e9f47c3b-6d58-4e9a-7b2f-8c5a9e1d4f3b",
+      "name": "Process Customer Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Map urgency to Atera severity\nconst data = $input.first().json;\n\nconst severityMap = {\n  'urgent': 'Critical',\n  'high': 'High', \n  'normal': 'Medium',\n  'low': 'Low'\n};\n\nconst severity = severityMap[data.urgency] || 'Medium';\n\n// Create ticket title\nconst ticketTitle = `VoiceBot Call - ${data.customer_name}`;\n\n// Create detailed description\nconst description = `VOICEBOT SUPPORT CALL\n\nCaller: ${data.customer_name}\nPhone: ${data.caller_id}\nTimestamp: ${data.timestamp}\nUrgency: ${data.urgency}\nCustomer Found: ${data.found_customer ? 'Yes' : 'No'}\n\nTRANSCRIPT:\n${data.transcript}\n\n---\nThis ticket was automatically created by the NETOVO VoiceBot system.`;\n\n// Build Atera ticket payload\nconst ticketPayload = {\n  TicketTitle: ticketTitle,\n  TicketPriority: severity,\n  TicketType: 'Problem',\n  TicketStatus: 'Open',\n  Description: description,\n  ProductFamilyID: 10, // Infrastructure/Support\n  TechnicianID: null // Unassigned\n};\n\n// Add customer/contact IDs if found\nif (data.customer_id) {\n  ticketPayload.CustomerID = data.customer_id;\n}\nif (data.contact_id) {\n  ticketPayload.ContactID = data.contact_id;\n}\n\nreturn {\n  ...data,\n  ticket_payload: ticketPayload,\n  severity: severity\n};"
+      },
+      "id": "f1a85d9c-7e26-4b3f-9c8a-2d6f4e9b1c5a",
+      "name": "Prepare Ticket Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://app.atera.com/api/v3/tickets",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "ateraApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.ticket_payload}}",
+        "options": {
+          "timeout": 15000,
+          "retry": {
+            "enabled": true,
+            "maxRetries": 3
+          }
+        }
+      },
+      "id": "a2b94f8c-5e17-4d6a-8b3f-7c9e2a5d8f1b",
+      "name": "Create Atera Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Process successful ticket creation\nconst ticketResult = $input.first().json;\nconst originalData = $('Prepare Ticket Data').first().json;\n\nreturn {\n  status: 'success',\n  ticket_id: ticketResult.ActionID,\n  ticket_number: ticketResult.TicketNumber,\n  customer_name: originalData.customer_name,\n  urgency: originalData.urgency,\n  severity: originalData.severity,\n  timestamp: originalData.timestamp,\n  message: `Ticket ${ticketResult.TicketNumber} created successfully`\n};"
+      },
+      "id": "b3c85e9d-6f28-4e7b-9d4a-8e1f3c6b9a5d",
+      "name": "Format Success Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Handle ticket creation errors\nconst error = $input.first().json;\n\nreturn {\n  status: 'error',\n  error_type: 'ticket_creation_failed',\n  message: error.message || 'Failed to create Atera ticket',\n  timestamp: new Date().toISOString(),\n  details: error\n};"
+      },
+      "id": "c4d96f0e-7a39-4f8c-0e5b-9f2a4d7c0b6e",
+      "name": "Format Error Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}"
+      },
+      "id": "d5e07a1f-8b40-4g9d-1f6c-0a3b5e8d1c7f",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Create Ticket": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Lookup Customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Customer": {
+      "main": [
+        [
+          {
+            "node": "Customer Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customer Found?": {
+      "main": [
+        [
+          {
+            "node": "Process Customer Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Process Customer Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Customer Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare Ticket Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Ticket Data": {
+      "main": [
+        [
+          {
+            "node": "Create Atera Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Atera Ticket": {
+      "main": [
+        [
+          {
+            "node": "Format Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success Response": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error Response": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "1",
+  "tags": [
+    {
+      "createdAt": "2024-10-16T14:30:00.000Z",
+      "updatedAt": "2024-10-16T14:30:00.000Z",
+      "id": "1",
+      "name": "NETOVO"
+    },
+    {
+      "createdAt": "2024-10-16T14:30:00.000Z",
+      "updatedAt": "2024-10-16T14:30:00.000Z",
+      "id": "2",
+      "name": "VoiceBot"
+    },
+    {
+      "createdAt": "2024-10-16T14:30:00.000Z",
+      "updatedAt": "2024-10-16T14:30:00.000Z",
+      "id": "3",
+      "name": "Atera"
+    }
+  ]
+}
