@@ -176,35 +176,46 @@ def handle_greeting(agi, tts, asr, ollama):
 
 def detect_ticket_request(ai_response: str) -> tuple:
     """
-    Detect if Phi4 wants to create a ticket
+    Detect if AI wants to create a ticket (intelligent format)
 
     Returns:
-        (should_create_ticket, urgency, cleaned_response)
+        (should_create_ticket, ticket_data, cleaned_response)
     """
-    # Primary: Check for [CREATE_TICKET: urgency=level]
-    pattern = r'\[CREATE_TICKET:\s*urgency=(\w+)\]'
+    # New intelligent format: [CREATE_TICKET: severity=level, product=type]
+    pattern = r'\[CREATE_TICKET:\s*severity=([^,]+),\s*product=([^\]]+)\]'
     match = re.search(pattern, ai_response, re.IGNORECASE)
 
     if match:
-        urgency = match.group(1).lower()
+        severity = match.group(1).strip().lower()
+        product = match.group(2).strip()
+
         # Remove marker from response
         cleaned = re.sub(pattern, '', ai_response, flags=re.IGNORECASE).strip()
-        logger.info(f"🎫 Ticket marker detected: urgency={urgency}")
-        return True, urgency, cleaned
 
-    # Fallback: Check for technical keywords (safety net)
-    # If Phi4 forgot to add marker but user clearly has tech issue
-    technical_indicators = [
-        'not working', 'broken', 'error', "can't access",
-        'problem with', 'issue with', 'help with', 'fix'
-    ]
+        ticket_data = {
+            'severity': severity,
+            'product_family': product
+        }
 
-    # Only trigger fallback if:
-    # 1. Response mentions helping/troubleshooting
-    # 2. Recent user message contains technical keywords
-    # This prevents false positives on info questions
+        logger.info(f"🎫 Intelligent ticket detected: severity={severity}, product={product}")
+        return True, ticket_data, cleaned
 
-    # For now, just return no ticket (we'll add fallback after testing primary approach)
+    # Fallback: Old format for compatibility
+    old_pattern = r'\[CREATE_TICKET:\s*severity=(\w+)\]'
+    old_match = re.search(old_pattern, ai_response, re.IGNORECASE)
+
+    if old_match:
+        severity = old_match.group(1).lower()
+        cleaned = re.sub(old_pattern, '', ai_response, flags=re.IGNORECASE).strip()
+
+        ticket_data = {
+            'severity': severity,
+            'product_family': 'General'  # Default fallback
+        }
+
+        logger.info(f"🎫 Basic ticket detected: severity={severity}")
+        return True, ticket_data, cleaned
+
     return False, None, ai_response
 
 def conversation_loop(agi, tts, asr, ollama, recorder):
@@ -250,17 +261,18 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             messages.append({'role': 'assistant', 'content': response})
 
             # === NEW: Check if ticket should be created ===
-            create_ticket, urgency, cleaned_response = detect_ticket_request(response)
+            create_ticket, ticket_data, cleaned_response = detect_ticket_request(response)
 
             if create_ticket:
-                # Create ticket (synchronous but fast)
-                logger.info(f"🎫 Creating ticket...")
+                # Create ticket with AI-determined data
+                logger.info(f"🎫 Creating intelligent ticket...")
 
                 ticket_id = create_ticket_via_n8n(
                     caller_id=agi.env.get('agi_callerid', 'Unknown'),
                     transcript=format_transcript(messages),
-                    urgency=urgency,
-                    customer_name=extract_customer_name(messages)
+                    severity=ticket_data['severity'],
+                    customer_name=extract_customer_name(messages),
+                    product_family=ticket_data['product_family']
                 )
 
                 if ticket_id:
