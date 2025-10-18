@@ -174,14 +174,14 @@ def handle_greeting(agi, tts, asr, ollama):
     else:
         logger.info("Greeting complete - ready for conversation")
 
-def detect_ticket_request(ai_response: str) -> tuple:
+def detect_ticket_request(ai_response: str, user_input: str = "") -> tuple:
     """
-    Detect if AI wants to create a ticket (intelligent format)
+    Detect if AI wants to create a ticket with fallback detection
 
     Returns:
         (should_create_ticket, ticket_data, cleaned_response)
     """
-    # New intelligent format: [CREATE_TICKET: severity=level, product=type]
+    # Primary: Check for [CREATE_TICKET: severity=level, product=type]
     pattern = r'\[CREATE_TICKET:\s*severity=([^,]+),\s*product=([^\]]+)\]'
     match = re.search(pattern, ai_response, re.IGNORECASE)
 
@@ -197,7 +197,7 @@ def detect_ticket_request(ai_response: str) -> tuple:
             'product_family': product
         }
 
-        logger.info(f"🎫 Intelligent ticket detected: severity={severity}, product={product}")
+        logger.info(f"🎫 Primary ticket detected: severity={severity}, product={product}")
         return True, ticket_data, cleaned
 
     # Fallback: Old format for compatibility
@@ -213,10 +213,73 @@ def detect_ticket_request(ai_response: str) -> tuple:
             'product_family': 'General'  # Default fallback
         }
 
-        logger.info(f"🎫 Basic ticket detected: severity={severity}")
+        logger.info(f"🎫 Legacy ticket detected: severity={severity}")
         return True, ticket_data, cleaned
 
+    # FALLBACK DETECTION: If Phi4 forgot to add marker but customer clearly has tech issue
+    if user_input:
+        user_lower = user_input.lower()
+        ai_lower = ai_response.lower()
+
+        # Technical issue keywords in user input
+        tech_keywords = [
+            'not working', 'broken', 'down', 'can\'t access', 'problem with',
+            'issue with', 'error', 'help with', 'fix', 'printer', 'email',
+            'computer', 'server', 'network', 'password', 'login', 'software'
+        ]
+
+        # AI helping indicators
+        help_indicators = [
+            'help you', 'assist', 'troubleshoot', 'fix that', 'resolve',
+            'let me', 'i can help', 'support'
+        ]
+
+        # Check if user mentioned technical issue AND AI is trying to help
+        user_has_tech_issue = any(keyword in user_lower for keyword in tech_keywords)
+        ai_is_helping = any(indicator in ai_lower for indicator in help_indicators)
+
+        if user_has_tech_issue and ai_is_helping:
+            # Determine product family from user input
+            product_family = detect_product_family_from_text(user_input)
+
+            # Determine severity (default to medium unless keywords suggest otherwise)
+            severity = 'medium'
+            if any(word in user_lower for word in ['emergency', 'urgent', 'critical', 'down', 'asap']):
+                severity = 'high'
+            elif any(word in user_lower for word in ['all users', 'entire', 'everyone']):
+                severity = 'critical'
+
+            ticket_data = {
+                'severity': severity,
+                'product_family': product_family
+            }
+
+            logger.warning(f"⚠️ FALLBACK ticket detected: Phi4 forgot marker! severity={severity}, product={product_family}")
+            logger.warning(f"User input: {user_input[:50]}...")
+            logger.warning(f"AI response: {ai_response[:50]}...")
+
+            return True, ticket_data, ai_response
+
     return False, None, ai_response
+
+def detect_product_family_from_text(text: str) -> str:
+    """Detect product family from user text"""
+    text_lower = text.lower()
+
+    if any(word in text_lower for word in ['email', 'outlook', 'mail', 'exchange']):
+        return 'Email'
+    elif any(word in text_lower for word in ['printer', 'print', 'printing', 'paper', 'toner']):
+        return 'Printing'
+    elif any(word in text_lower for word in ['network', 'internet', 'wifi', 'connection', 'router']):
+        return 'Network'
+    elif any(word in text_lower for word in ['password', 'login', 'access', 'account']):
+        return 'Security'
+    elif any(word in text_lower for word in ['software', 'application', 'program', 'app', 'system']):
+        return 'Software'
+    elif any(word in text_lower for word in ['computer', 'laptop', 'desktop', 'hardware', 'device']):
+        return 'Hardware'
+    else:
+        return 'General'
 
 def conversation_loop(agi, tts, asr, ollama, recorder):
     """Main conversation loop"""
@@ -262,23 +325,20 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
 
             # === AI-POWERED TICKET CREATION ===
             try:
-                create_ticket, ticket_data, cleaned_response = detect_ticket_request(response)
+                create_ticket, ticket_data, cleaned_response = detect_ticket_request(response, transcript)
 
                 if create_ticket and ticket_data:
                     logger.info(f"🎫 AI detected ticket need: {ticket_data}")
 
-                    # Let AI determine the data, fallback gracefully
-                    ticket_id = create_ticket_via_n8n(
+                    # Create ticket in background (non-blocking) - conversation continues immediately
+                    create_ticket_via_n8n(
                         caller_id=agi.env.get('agi_callerid', 'Unknown'),
                         transcript=format_transcript(messages),
                         severity=ticket_data.get('severity', 'medium'),
                         customer_name=extract_customer_name(messages)
                     )
 
-                    if ticket_id:
-                        logger.info(f"✅ Ticket {ticket_id} created by AI intelligence")
-                    else:
-                        logger.warning("⚠️ Ticket creation failed - continuing conversation")
+                    logger.info(f"🚀 Ticket creation initiated in background - conversation continues")
 
                     # Use AI-cleaned response
                     response = cleaned_response
