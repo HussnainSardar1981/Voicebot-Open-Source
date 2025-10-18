@@ -260,28 +260,33 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             # Add bot response to history
             messages.append({'role': 'assistant', 'content': response})
 
-            # === NEW: Check if ticket should be created ===
-            create_ticket, ticket_data, cleaned_response = detect_ticket_request(response)
+            # === AI-POWERED TICKET CREATION ===
+            try:
+                create_ticket, ticket_data, cleaned_response = detect_ticket_request(response)
 
-            if create_ticket:
-                # Create ticket with AI-determined data
-                logger.info(f"🎫 Creating intelligent ticket...")
+                if create_ticket and ticket_data:
+                    logger.info(f"🎫 AI detected ticket need: {ticket_data}")
 
-                ticket_id = create_ticket_via_n8n(
-                    caller_id=agi.env.get('agi_callerid', 'Unknown'),
-                    transcript=format_transcript(messages),
-                    severity=ticket_data['severity'],
-                    customer_name=extract_customer_name(messages),
-                    product_family=ticket_data['product_family']
-                )
+                    # Let AI determine the data, fallback gracefully
+                    ticket_id = create_ticket_via_n8n(
+                        caller_id=agi.env.get('agi_callerid', 'Unknown'),
+                        transcript=format_transcript(messages),
+                        severity=ticket_data.get('severity', 'medium'),
+                        customer_name=extract_customer_name(messages)
+                    )
 
-                if ticket_id:
-                    logger.info(f"🎫 Ticket {ticket_id} created successfully")
-                else:
-                    logger.warning("🎫 Ticket creation failed")
+                    if ticket_id:
+                        logger.info(f"✅ Ticket {ticket_id} created by AI intelligence")
+                    else:
+                        logger.warning("⚠️ Ticket creation failed - continuing conversation")
 
-            # Use cleaned response (marker removed)
-            response = cleaned_response
+                    # Use AI-cleaned response
+                    response = cleaned_response
+
+            except Exception as e:
+                logger.error(f"Ticket processing error: {e} - continuing conversation")
+                # If ticket processing fails, continue with original response
+                pass
         else:
             failed_interactions += 1
             no_response_count += 1
