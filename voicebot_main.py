@@ -289,6 +289,10 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
     start_time = time.time()
     messages = []  # Track conversation for ticket creation
 
+    # 🎫 ONE TICKET PER CALL: Track ticket creation state
+    ticket_created = False
+    ticket_number = None
+
     for turn in range(max_turns):
         logger.info(f"Conversation turn {turn + 1}")
 
@@ -323,14 +327,15 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             # Add bot response to history
             messages.append({'role': 'assistant', 'content': response})
 
-            # === AI-POWERED TICKET CREATION ===
+            # === SMART TICKET CREATION: One comprehensive ticket per call ===
             try:
                 create_ticket, ticket_data, cleaned_response = detect_ticket_request(response, transcript)
 
-                if create_ticket and ticket_data:
-                    logger.info(f"🎫 AI detected ticket need: {ticket_data}")
+                if create_ticket and ticket_data and not ticket_created:
+                    logger.info(f"🎫 AI determined ticket is ready: {ticket_data}")
+                    logger.info(f"📋 Creating comprehensive ticket with {len(messages)} conversation turns")
 
-                    # Create ticket in background (non-blocking) - conversation continues immediately
+                    # Create one comprehensive ticket with full conversation
                     create_ticket_via_n8n(
                         caller_id=agi.env.get('agi_callerid', 'Unknown'),
                         transcript=format_transcript(messages),
@@ -338,10 +343,19 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
                         customer_name=extract_customer_name(messages)
                     )
 
-                    logger.info(f"🚀 Ticket creation initiated in background - conversation continues")
+                    # Mark ticket as created for this call
+                    ticket_created = True
+                    ticket_number = "AUTO-GENERATED"  # Will be replaced by actual ticket ID
 
-                    # Use AI-cleaned response
+                    logger.info(f"✅ Comprehensive ticket created - no more tickets for this call")
+
+                    # Use AI-cleaned response (should include professional confirmation)
                     response = cleaned_response
+
+                elif create_ticket and ticket_created:
+                    # AI tried to create another ticket - ignore and clean response
+                    logger.info(f"⚠️ AI tried to create duplicate ticket - ignored (ticket already exists)")
+                    response = cleaned_response.replace("[CREATE_TICKET", "[TICKET_ALREADY_EXISTS")
 
             except Exception as e:
                 logger.error(f"Ticket processing error: {e} - continuing conversation")
