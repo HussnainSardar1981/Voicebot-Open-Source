@@ -7,6 +7,8 @@ GPU-accelerated speech processing for professional customer service
 import os
 import time
 import logging
+import re
+import asyncio
 from datetime import datetime
 
 # Import configuration and utilities
@@ -23,6 +25,7 @@ from socket_clients import test_socket_connection
 from agi_interface import SimpleAGI, FastInterruptRecorder
 from production_recorder import ProductionCallRecorder
 from audio_utils import convert_audio_for_asterisk
+from n8n_webhook import create_ticket_via_n8n, format_transcript, extract_customer_name
 
 # Set up configuration
 setup_project_path()
@@ -171,12 +174,46 @@ def handle_greeting(agi, tts, asr, ollama):
     else:
         logger.info("Greeting complete - ready for conversation")
 
+def detect_ticket_request(ai_response: str) -> tuple:
+    """
+    Detect if Phi4 wants to create a ticket
+
+    Returns:
+        (should_create_ticket, urgency, cleaned_response)
+    """
+    # Primary: Check for [CREATE_TICKET: urgency=level]
+    pattern = r'\[CREATE_TICKET:\s*urgency=(\w+)\]'
+    match = re.search(pattern, ai_response, re.IGNORECASE)
+
+    if match:
+        urgency = match.group(1).lower()
+        # Remove marker from response
+        cleaned = re.sub(pattern, '', ai_response, flags=re.IGNORECASE).strip()
+        logger.info(f"🎫 Ticket marker detected: urgency={urgency}")
+        return True, urgency, cleaned
+
+    # Fallback: Check for technical keywords (safety net)
+    # If Phi4 forgot to add marker but user clearly has tech issue
+    technical_indicators = [
+        'not working', 'broken', 'error', "can't access",
+        'problem with', 'issue with', 'help with', 'fix'
+    ]
+
+    # Only trigger fallback if:
+    # 1. Response mentions helping/troubleshooting
+    # 2. Recent user message contains technical keywords
+    # This prevents false positives on info questions
+
+    # For now, just return no ticket (we'll add fallback after testing primary approach)
+    return False, None, ai_response
+
 def conversation_loop(agi, tts, asr, ollama, recorder):
     """Main conversation loop"""
     max_turns = CONVERSATION_CONFIG["max_turns"]
     failed_interactions = 0
     no_response_count = 0
     start_time = time.time()
+    messages = []  # Track conversation for ticket creation
 
     for turn in range(max_turns):
         logger.info(f"Conversation turn {turn + 1}")
@@ -195,6 +232,9 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             failed_interactions = 0
             no_response_count = 0
 
+            # Add to conversation history (for transcript)
+            messages.append({'role': 'user', 'content': transcript})
+
             # Check for USER exit intents (not AI responses)
             if any(phrase in transcript.lower() for phrase in EXIT_PHRASES):
                 response = "Thank you for calling Netovo. Have a great day!"
@@ -205,6 +245,28 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             else:
                 # Normal AI response
                 response = ollama.generate(transcript)
+
+            # Add bot response to history
+            messages.append({'role': 'assistant', 'content': response})
+
+            # === NEW: Check if ticket should be created ===
+            create_ticket, urgency, cleaned_response = detect_ticket_request(response)
+
+            if create_ticket:
+                # Create ticket in background (non-blocking)
+                logger.info(f"🎫 Creating ticket in background...")
+
+                asyncio.create_task(
+                    create_ticket_via_n8n(
+                        caller_id=agi.env.get('agi_callerid', 'Unknown'),
+                        transcript=format_transcript(messages),
+                        urgency=urgency,
+                        customer_name=extract_customer_name(messages)
+                    )
+                )
+
+            # Use cleaned response (marker removed)
+            response = cleaned_response
         else:
             failed_interactions += 1
             no_response_count += 1
