@@ -253,17 +253,20 @@ def conversation_loop(agi, tts, asr, ollama, recorder):
             create_ticket, urgency, cleaned_response = detect_ticket_request(response)
 
             if create_ticket:
-                # Create ticket in background (non-blocking)
-                logger.info(f"🎫 Creating ticket in background...")
+                # Create ticket (synchronous but fast)
+                logger.info(f"🎫 Creating ticket...")
 
-                asyncio.create_task(
-                    create_ticket_via_n8n(
-                        caller_id=agi.env.get('agi_callerid', 'Unknown'),
-                        transcript=format_transcript(messages),
-                        urgency=urgency,
-                        customer_name=extract_customer_name(messages)
-                    )
+                ticket_id = create_ticket_via_n8n(
+                    caller_id=agi.env.get('agi_callerid', 'Unknown'),
+                    transcript=format_transcript(messages),
+                    urgency=urgency,
+                    customer_name=extract_customer_name(messages)
                 )
+
+                if ticket_id:
+                    logger.info(f"🎫 Ticket {ticket_id} created successfully")
+                else:
+                    logger.warning("🎫 Ticket creation failed")
 
             # Use cleaned response (marker removed)
             response = cleaned_response
